@@ -40,6 +40,29 @@ A phone bridge is a possible part of the capture path. The phone OS, streaming m
 
 Perception and alert policy are different tasks. A model may detect an object without proving it is on a collision course or measuring its distance. Do not infer reliable metric depth from a single image or bounding-box size without validation.
 
+## Decisions (2026-11-07)
+
+| Decision | Choice | Why |
+|---|---|---|
+| Structure | `esp32/` (belt), `hub/` (center), `meta/` (phone) | Owner asked for three distinct, modular sections |
+| Phone | iPhone, Meta Wearables DAT in Developer Mode | Owner's phone; no Managed Meta account needed for a team-only prototype |
+| Compute | Python hub on a laptop | Easiest to iterate on and train models; the phone only forwards frames |
+| Belt link | ESP32 + BLE GATT, 5 motors across the front | Glasses only see forward; ESP32 has BLE built in |
+| Contracts | [docs/protocol.md](protocol.md), with golden vectors tested in all three sections | Lets teammates work in parallel |
+| Haptic meaning | Motor = obstacle in that direction (not "move this way"); a distinct fault pattern means "not reliable" | AGENTS.md safety rules |
+| Perception baseline | Depth Anything V2 Metric Small + YOLO11n/ByteTrack box-growth TTC | Pretrained baseline before any fine-tuning |
+| Focus | Owner: prioritize `esp32/` and the hub; the phone app is parked as is | Owner request |
+
+## Status (2026-11-07)
+
+| Component | Implemented | Verified | Not yet verified |
+|---|---|---|---|
+| `esp32/` | BLE server, PWM motors, TTL/fault failsafe, serial console | builds for `esp32dev`; 13 native logic tests pass | on a real board, motors, wiring, BLE range |
+| `hub/` | glasses WS server, webcam/file/stream sources, depth + YOLO perception, haptic policy, safety monitor, BLE + simulated belt | 27 tests pass (incl. end-to-end with a fake phone and simulated belt); real models ran on a sample video at ~37 ms/frame on Apple MPS | real BLE belt, glasses frames, accuracy of distance/TTC, end-to-end latency |
+| `meta/` | SDK registration/stream, frame forwarding, hub status UI | builds for the simulator; 5 protocol tests pass | on an iPhone with the glasses |
+
+None of the perception thresholds have been validated against measured distances.
+
 ## Open decisions
 
 Resolve the questions needed for the next experiment rather than choosing an entire stack in advance.

@@ -8,6 +8,23 @@ An accessibility prototype exploring Ray-Ban camera video and a vibration belt t
 
 The project direction is documented; hardware and software integration are not yet verified. Read the context and current code before assuming a working implementation.
 
+## Layout
+
+Three independent sections that talk only through [docs/protocol.md](docs/protocol.md):
+
+| Folder | What | Runs on |
+|---|---|---|
+| [`esp32/`](esp32/README.md) | belt firmware: BLE in, vibration motors out, failsafe | ESP32 |
+| [`hub/`](hub/README.md) | center: video feed in, collision perception, haptic commands out | laptop (Python) |
+| [`meta/`](meta/README.md) | phone bridge: Meta glasses camera to the hub | iPhone |
+
+```text
+glasses ─▶ meta/ ──WebSocket──▶ hub/ ──BLE──▶ esp32/ ─▶ motors
+           (or webcam / video file / RTSP stream straight into hub/)
+```
+
+Quick start without any hardware: `cd hub && uv sync --extra vision && uv run haptic-hub run --source webcam --belt sim --show`
+
 ## Team
 - [@chxrro](https://github.com/chxrro)
 - [@NathanS11](https://github.com/NathanS11)

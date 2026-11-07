@@ -21,3 +21,8 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# PlatformIO / Xcode / ML artifacts
+.pio/
+DerivedData/
+*.pt
