@@ -1,0 +1,12 @@
+// Shared build settings. Per-person values (signing team, bundle ID) go in
+// Local.xcconfig, which is gitignored. Copy Local.xcconfig.example to start.
+
+PRODUCT_BUNDLE_IDENTIFIER = com.hackutd26.hapticbelt$(BUNDLE_ID_SUFFIX)
+CODE_SIGN_STYLE = Automatic
+
+// Meta Wearables Developer Mode: MetaAppID 0 = no app ID, the SDK skips
+// attestation. Only works with Developer Mode on in the Meta AI app.
+META_APP_ID = 0
+CLIENT_TOKEN =
+
+#include? "Local.xcconfig"
