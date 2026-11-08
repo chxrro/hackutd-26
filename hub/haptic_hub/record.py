@@ -263,3 +263,11 @@ class RecordingSource:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.inner, name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        # Writes pass through too: the hub hands the glasses server its `control`
+        # (app.py), and only the wrapped server handles the phone's messages.
+        if name not in ("inner", "recorder", "name") and hasattr(self.inner, name):
+            setattr(self.inner, name, value)
+        else:
+            super().__setattr__(name, value)

@@ -20,48 +20,67 @@ class DebugView:
 
     def show(self, frame: Frame, result: PerceptionResult, cmd: BeltCommand, reason: str | None) -> bool:
         """Draws one frame. Returns False if the user pressed q or Esc."""
-        img = frame.image
-        scale = self.width / img.shape[1]
-        img = cv2.resize(img, (self.width, round(img.shape[0] * scale)))
-        h, w = img.shape[:2]
-        n = len(result.sectors)
-
-        infer_w, _ = result.debug.get("infer_size", (w, h))
-        box_scale = w / infer_w
-        for box, text, color in _box_labels(result.debug):
-            p1 = (int(box.x1 * box_scale), int(box.y1 * box_scale))
-            p2 = (int(box.x2 * box_scale), int(box.y2 * box_scale))
-            cv2.rectangle(img, p1, p2, color, 2)
-            cv2.putText(img, text, (p1[0], p1[1] - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
-        if self.latency_line:
-            cv2.putText(img, self.latency_line, (6, h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-        if (classifier := _classifier_line(result.debug)) is not None:
-            cv2.putText(img, classifier, (6, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
-
-        for x0, _ in sector_edges(w, n)[1:]:
-            cv2.line(img, (x0, 0), (x0, h), (255, 255, 255), 1)
-
-        bar_h = 70
-        panel = np.zeros((bar_h, w, 3), np.uint8)
-        for i, ((x0, x1), sector) in enumerate(zip(sector_edges(w, n), result.sectors, strict=True)):
-            level = cmd.levels[i] / 255
-            color = (0, 0, 255) if cmd.mode == BeltMode.LEVELS else (120, 120, 120)
-            cv2.rectangle(panel, (x0 + 3, int(bar_h * (1 - level))), (x1 - 3, bar_h), color, -1)
-            text = f"{sector.nearest_m:.1f}m" if sector.nearest_m is not None else "-"
-            if sector.ttc_s is not None:
-                text += f" {sector.ttc_s:.1f}s"
-            cv2.putText(panel, text, (x0 + 4, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-
-        banner = f"{cmd.mode.name}  {result.inference_ms:.0f} ms  [{frame.source}]"
-        if reason:
-            banner = f"FAULT: {reason}"
-        cv2.putText(img, banner, (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0) if not reason else (0, 0, 255), 2)
-
-        cv2.imshow(WINDOW, np.vstack([img, panel]))
+        cv2.imshow(WINDOW, render(frame, result, cmd, reason, self.width, footer=self.latency_line))
         return cv2.waitKey(1) & 0xFF not in (ord("q"), 27)
 
     def close(self) -> None:
         cv2.destroyWindow(WINDOW)
+
+
+def render(
+    frame: Frame,
+    result: PerceptionResult,
+    cmd: BeltCommand,
+    reason: str | None,
+    width: int = 480,
+    panel: bool = True,
+    banner: bool = True,
+    footer: str | None = None,
+) -> np.ndarray:
+    """The --show picture as a BGR image: frame scaled to `width`, sector lines, labelled
+    boxes, and (optionally) the motor panel below, the mode/fault banner on top and a
+    `footer` line at the bottom of the frame (--show: the latency summary).
+    Pure: no window, safe to call from any thread."""
+    img = frame.image
+    scale = width / img.shape[1]
+    img = cv2.resize(img, (width, round(img.shape[0] * scale)))
+    h, w = img.shape[:2]
+    n = len(result.sectors)
+
+    infer_w, _ = result.debug.get("infer_size", (w, h))
+    box_scale = w / infer_w
+    for box, text, color in _box_labels(result.debug):
+        p1 = (int(box.x1 * box_scale), int(box.y1 * box_scale))
+        p2 = (int(box.x2 * box_scale), int(box.y2 * box_scale))
+        cv2.rectangle(img, p1, p2, color, 2)
+        cv2.putText(img, text, (p1[0], p1[1] - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+    if footer:
+        cv2.putText(img, footer, (6, h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+    if banner and (classifier := _classifier_line(result.debug)) is not None:
+        cv2.putText(img, classifier, (6, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+
+    for x0, _ in sector_edges(w, n)[1:]:
+        cv2.line(img, (x0, 0), (x0, h), (255, 255, 255), 1)
+
+    if banner:
+        text = f"{cmd.mode.name}  {result.inference_ms:.0f} ms  [{frame.source}]"
+        if reason:
+            text = f"FAULT: {reason}"
+        cv2.putText(img, text, (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0) if not reason else (0, 0, 255), 2)
+
+    if not panel:
+        return img
+    bar_h = 70
+    strip = np.zeros((bar_h, w, 3), np.uint8)
+    for i, ((x0, x1), sector) in enumerate(zip(sector_edges(w, n), result.sectors, strict=True)):
+        level = cmd.levels[i] / 255
+        color = (0, 0, 255) if cmd.mode == BeltMode.LEVELS else (120, 120, 120)
+        cv2.rectangle(strip, (x0 + 3, int(bar_h * (1 - level))), (x1 - 3, bar_h), color, -1)
+        label = f"{sector.nearest_m:.1f}m" if sector.nearest_m is not None else "-"
+        if sector.ttc_s is not None:
+            label += f" {sector.ttc_s:.1f}s"
+        cv2.putText(strip, label, (x0 + 4, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+    return np.vstack([img, strip])
 
 
 PERSON_COLOR = (255, 0, 255)  # magenta

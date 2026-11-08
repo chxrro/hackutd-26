@@ -24,10 +24,13 @@ haptic_hub/
     openvocab.py       detector that finds hazards by text prompt (--detector openvocab)
   haptics.py         risk -> motor levels (instant rise, slow fade, deadband)
   safety.py          when to send the fault pattern instead of levels
+  control.py         runtime settings for the phone / dashboard: pause, belt test,
+                     alert range, classifier; pairing code (docs/protocol.md "Control")
   belt/              where commands go
     ble.py             the ESP32 over BLE (bleak)
     sim.py             simulator
-  viz.py             --show debug window
+  viz.py             --show debug window (render() also draws the dashboard preview)
+  dashboard/         --dashboard: operator page on http://127.0.0.1:8780/ (plain HTML/JS)
   record.py          opt-in frame recording (--record), wraps any source
   latency.py         per-stage hub latency, logged every 5 s
 ```
@@ -68,6 +71,10 @@ uv run haptic-hub run --perception sweep
 # Belt only
 uv run haptic-hub scan
 uv run haptic-hub belt-test
+
+# Operator dashboard in a browser on this laptop
+uv run haptic-hub run --source webcam --belt sim --dashboard
+#   then open  http://127.0.0.1:8780/
 ```
 
 Options: `--perception depth|detector` runs one model only (faster),
@@ -82,6 +89,57 @@ Live sources (`webcam`, `stream`) reconnect on their own if the feed drops.
 While the feed is down the belt plays the fault pattern. Files play at their
 own frame rate and loop. With `--belt sim` the terminal shows the belt, e.g.
 `belt LEVELS [ ▃█▃ ]`.
+
+## Dashboard and remote control
+
+`--dashboard` serves one page on `http://127.0.0.1:8780/` (`--dashboard-port`
+changes the port). It is bound to this laptop only, never the network. It
+shows:
+
+- the live frame, with people in magenta and objects in orange. The picture is
+  labelled when it is frozen, or when the detections are not current;
+- the five motors, left to right, and the belt mode (`levels`, `off`, `fault`).
+  "Simulated belt" means nothing vibrates;
+- a health banner: green "Alerts active", amber "Alerts paused", blue "Belt
+  test", and red "FAULT: <reason>" when the hub can't vouch for its output.
+  Screen readers announce each change;
+- the frame source. Anything other than the glasses says so, e.g. "Laptop
+  webcam: NOT the glasses";
+- inference time, frame age, and the cloud classifier's model, round trip,
+  last reply and error;
+- the **control code** the phone needs, and the phone's hub address.
+
+Its buttons use the same control layer as the phone: pause and resume, belt
+test, classifier, and alert range. Each request gets a reply on the page. The
+page never slows the belt heartbeat. The preview is drawn in a worker thread at
+about 8 fps, 480 px wide, and only while a page is open. A page that falls
+behind is skipped rather than queued. The server answers only `Host:
+127.0.0.1` / `localhost` and refuses WebSocket handshakes from other web
+pages' origins, so a website you visit can't pause the belt or read the code.
+
+**Pairing.** At startup the hub prints a new 16-character control code
+(`control code (...): 3f9c0a1b2d4e5f60`). The phone sends it in `hello` to be
+allowed to change settings. Without it, the phone can still stream frames. The
+code is printed once and never logged. Even with `-v`, the hub's WebSocket
+servers don't log message payloads.
+
+| Control | Effect |
+|---|---|
+| pause / resume | Belt gets `off`. Status: `healthy: false`, `reason: "alerts paused"`. A camera, perception or belt fault still shows as the reason while paused. |
+| belt test | Each motor in turn, left to right, 0.4 s each (2 s for 5 motors, never over 3 s). Refused while paused. Status reason `"belt test"`. Real alerts are replaced by the sweep for those ≤ 3 s, so don't run it on a walk. |
+| classifier | `local` ⇄ `nim` at runtime. `nim` is only allowed if the hub started with a cloud endpoint (`--classifier nim`, `--nim-url`, `--nim-env`, or `NIM_BASE_URL` / `NIM_API_KEY` / `NVIDIA_API_KEY`). Each switch to `nim` probes the endpoint again; if that fails, nothing changes. |
+| alert range | Presets for where alerts start (below). |
+| record | Not wired to the control layer yet: `true` is refused with `"recording not available"`. Start the hub with `--record` instead (see Recording and replay). |
+
+Alert range presets. **Unvalidated**: they only move where the risk ramps
+start. `near_m` (0.6 m) and `ttc_near_s` (1 s), where risk is full, don't
+change.
+
+| Preset | Depth alerts start below (`far_m`) | Approach alerts start below (`ttc_far_s`) |
+|---|---|---|
+| `near` | 1.5 m | 2.0 s |
+| `normal` (default, = `config.py`) | 2.5 m | 3.0 s |
+| `far` | 3.5 m | 4.0 s |
 
 ## Recording and replay
 
@@ -372,6 +430,9 @@ thresholds are not validated; tune on replayed clips
   pole and a fallen bin in our test photos (see above).
 - Webcam/video results are not glasses results; the status says which source
   is active.
+- The dashboard and control layer are tested over loopback with fake
+  perception and a simulated belt only. They have not been used with the
+  phone app, glasses or a real belt yet.
 - Person/object labels have not been checked for accuracy on our own footage,
   local or cloud. Cloud labels arrive a round trip late, so a new box shows its
   local label first.

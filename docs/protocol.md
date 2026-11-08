@@ -68,6 +68,89 @@ Golden vector (seq=1, capture_ms=1700000000000, 504×896, jpeg=`ff d8 ff d9`):
   e.g. `"no camera frames for 1.2 s"`.
 - `belt`: `connected` | `connecting` | `disconnected` | `simulated`.
 
+### Control (WebSocket text JSON, additive, draft 2026-11-07)
+
+Lets a paired phone app change hub settings. The frame format, the belt
+command, and the existing `hello` / `phone_status` / `status` fields are
+unchanged. A client that never sends control messages works as before, and
+clients must ignore status fields they don't know.
+
+**Pairing.** At startup the hub generates a random 16-character lowercase hex
+**control code**. It prints the code in its terminal and shows it on the
+localhost-only dashboard. A client that wants control includes it in `hello`:
+
+```json
+{"type": "hello", "client": "ios", "version": 1, "control_code": "3f9c0a1b2d4e5f60"}
+```
+
+Without the matching code, frames are accepted as before, but every `control`
+message is answered `ok: false, error: "not paired"`. The hub never logs the
+code a client sends.
+
+Pairing belongs to one WebSocket connection. After a reconnect, send `hello`
+with the code again. A later `hello` with a wrong or missing code unpairs that
+connection. The code changes every time the hub restarts.
+
+**Request** (client → hub):
+
+```json
+{"type": "control", "id": 12, "action": "set", "settings": {"alert_range": "far"}}
+```
+
+| `action`    | Extra fields | Effect |
+|-------------|--------------|--------|
+| `get`       | none | No effect. Replies with the current settings, so it also checks pairing. |
+| `pause`     | none | Alerts stop: the belt gets `off`. Status shows `healthy: false`, `reason: "alerts paused"`, `paused: true`. |
+| `resume`    | none | Back to normal. |
+| `belt_test` | none | The hub plays a short sweep across the motors (≤ 3 s), then goes back to normal. Refused while paused, while a test is running, or while the belt is disconnected. |
+| `set`       | `settings` object, one or more keys below | Change settings. Unknown keys reject the whole request. |
+
+`pause` and `resume` are idempotent. `pause` also stops a running belt test.
+
+While paused, the belt stays `off`, but a real fault takes priority in
+`reason`: `"no camera frames for 1.2 s"`, `"perception failing: ..."`,
+`"belt disconnected"` or `"belt connecting"` replace `"alerts paused"`. Read
+`paused` to tell whether alerts are paused. Don't infer it from `reason`.
+
+During a belt test, status shows `mode: "levels"`, `healthy: false` and
+`reason: "belt test"`. Those vibrations are not obstacles.
+
+| Setting       | Values | Meaning |
+|---------------|--------|---------|
+| `classifier`  | `"local"` \| `"nim"` | Person/object labels from the detector, or from the cloud model (if the hub was started with a cloud endpoint configured). |
+| `alert_range` | `"near"` \| `"normal"` \| `"far"` | Preset for how early alerts start (distance and time-to-collision thresholds). |
+| `record`      | `true` \| `false` | Opt-in session recording, if the hub supports it. The phone must get explicit consent before sending `true`. A hub without recording answers `true` with `error: "recording not available"` and accepts `false`. |
+
+The hub chooses the `alert_range` thresholds and lists them in `hub/README.md`.
+`normal` is the default. None of them are validated.
+
+**Reply** (hub → that client only), for every request:
+
+```json
+{"type": "ack", "id": 12, "ok": true, "error": null, "settings": {"classifier": "local", "alert_range": "far", "record": false, "paused": false}}
+```
+
+`settings` is always the hub's full current state after the request. `ok: false`
+means nothing changed; `error` says why (`"not paired"`, `"unknown setting: volume"`,
+`"cloud classifier not configured"`, `"refused while paused"`, ...). `id` is
+echoed as sent (`null` if missing). Show `error` to the user, but don't parse
+it, except to compare it exactly with `"not paired"`.
+
+**Status additions** (hub → all clients, optional fields):
+
+```json
+{"paused": false, "settings": {"classifier": "local", "alert_range": "normal", "record": false, "paused": false},
+ "sectors": [{"kind": null}, {"kind": "object"}, {"kind": "person"}, {"kind": null}, {"kind": null}]}
+```
+
+`sectors[i].kind` is the kind of the largest labelled detection box in that
+motor's direction (`"person"`, `"object"` or `null`), for speech and display
+only. Box size stands in for "nearest", because no distance is measured. It says
+nothing about distance or safety. All kinds are `null` while the hub's input or
+perception is faulted, so a stale result is never announced as current. `null`
+does not mean "nothing there". Pausing is explicit and announced; it is never a
+silent clear-path signal.
+
 ## 3. Hub → belt: haptic command (BLE GATT write)
 
 | Item                  | UUID                                   |
