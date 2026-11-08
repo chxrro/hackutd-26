@@ -79,7 +79,7 @@ cd cad/belt-enclosure
 | Qty | Part |
 |---|---|
 | 4 | M3 × 10 countersunk screws, threaded straight into the plastic bosses (2.7 mm pilot), for the lid |
-| 2 | M3 × 10 countersunk screws and 2 M3 nuts, for the clip |
+| 2 | M3 × 10 countersunk screws and 2 M3 hex nuts (5.5 mm across flats), for the clip. The nuts drop into hex pockets on the floor. |
 | 4 | M2.5 × 8 self-tapping screws for the ESP32, or hot glue / double-sided foam tape if its holes don't line up with the pillars |
 | — | Double-sided foam tape or hot glue for the ULN2003 boards (they sit on rails, no screws) |
 | 3 | Zip ties, up to 4 mm wide (2 for the harnesses, 1 for the capacitor) |
@@ -87,7 +87,7 @@ cd cad/belt-enclosure
 
 ## Assembly
 
-1. Optional: screw the clip to the back. Feed an M3 × 10 countersunk screw from the clip side through the access hole in the tongue, and put the nut on inside the box. Skip this if you're taping the box or threading a belt.
+1. Optional: screw the clip to the back. Drop an M3 nut into each hex pocket on the inside floor. Then feed an M3 × 10 countersunk screw from the clip side, through the access hole in the tongue, and tighten it into the nut. The pocket stops the nut from turning. Do this before you fit the ESP32, which sits over the pockets. Skip this if you're taping the box or threading a belt.
 2. Stick the steel ring into the lid's pocket and press it flat.
 3. Stick the ULN2003 boards onto their rails with foam tape or hot glue. Plug in both motor harnesses and lay each one into its notch. Zip-tie each harness to its buttress through the tunnel, with the tie head inside the box. The lid closes over the notches but doesn't clamp the wires.
 4. Connect the jumpers to the ESP32 header pins following the two-board wiring: GPIO 32/33/25/26 to board A IN1–4, GPIO 27/14/13/4 to board B IN1–4, and VIN/GND to both boards' + and −. As of 2026-11-07, `esp32/include/config.h` and `esp32/README.md` still describe the older 5-motor ULN2803 wiring, so the firmware pin map has to be updated before this harness will work. Lower the ESP32 onto its pillars with the USB-C port in the wall notch. Screw it down if the holes line up; otherwise glue or tape it to the pillar tops.
