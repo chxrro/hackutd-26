@@ -89,6 +89,19 @@ final class GlassesController {
     }
   }
 
+  /// Opens Meta AI on the update for the DAT app component on the glasses.
+  /// Needed when the SDK reports the glasses' app component is out of date
+  /// (seen on Ray-Ban Meta Gen 2 with the ios/ Camera Bridge, 2026-11-07).
+  func openGlassesAppUpdate() {
+    Task {
+      do {
+        try await wearables.openDATGlassesAppUpdate()
+      } catch {
+        errorMessage = "Couldn't open the glasses app update: \(error.localizedDescription)"
+      }
+    }
+  }
+
   /// Meta AI returns to the app through the URL scheme after registration and permission prompts.
   func handleOpenURL(_ url: URL) {
     guard

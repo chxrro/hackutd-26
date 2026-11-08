@@ -50,12 +50,24 @@
 			<key>OptOut</key>
 			<true/>
 		</dict>
+		<key>CrashReporting</key>
+		<dict>
+			<key>OptOut</key>
+			<true/>
+		</dict>
 	</dict>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>processing</string>
 		<string>bluetooth-central</string>
 		<string>bluetooth-peripheral</string>
+		<string>external-accessory</string>
+	</array>
+	<!-- The glasses are an MFi accessory; the SDK talks to them over this protocol.
+	     Same as Meta's CameraAccess sample and ios/Info.plist (which ran on an iPhone 17). -->
+	<key>UISupportedExternalAccessoryProtocols</key>
+	<array>
+		<string>com.meta.ar.wearable</string>
 	</array>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Connects to your Meta AI glasses to read the camera.</string>
