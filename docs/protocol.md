@@ -67,6 +67,16 @@ Golden vector (seq=1, capture_ms=1700000000000, 504×896, jpeg=`ff d8 ff d9`):
 - `healthy: false` means the hub can't vouch for the output. `reason` says why,
   e.g. `"no camera frames for 1.2 s"`.
 - `belt`: `connected` | `connecting` | `disconnected` | `simulated`.
+- Belt reasons (changed 2026-11-08, hub only): `"belt disconnected"` and
+  `"belt connecting"` now set `healthy: false` whether or not alerts are paused
+  (before, an unpaused hub said `healthy: true` with `belt: "disconnected"`).
+  `"belt not acknowledging"` (new) means the BLE link is up (`belt: "connected"`)
+  but the belt hasn't acknowledged a command for longer than the command TTL, so
+  it has stopped following the hub: it may be playing the fault pattern, or
+  nothing. The hub reconnects on its own. See "Write acknowledgement" in section 3.
+- Reason precedence: camera/perception faults, then `"belt disconnected"` /
+  `"belt connecting"`, then `"belt not acknowledging"`, then `"alerts paused"` /
+  `"resuming alerts"`. A belt problem also ends a running belt test.
 
 ### Control (WebSocket text JSON, additive, draft 2026-11-07)
 
@@ -187,6 +197,36 @@ Golden vector (levels, seq=7, ttl=250, levels `[0, 64, 128, 192, 255]`):
 ```
 
 Info payload (read): `[protocol_version, motor_count]`, e.g. `01 05`.
+
+### Write acknowledgement (hub, added 2026-11-08)
+
+The hub writes commands **with response** (ATT Write Request). The firmware has
+always accepted both write types, so nothing changed on the belt. The hub keeps
+at most one write in flight and always sends the newest command; the 15 Hz loop
+never waits on the radio.
+
+- **Not acknowledging.** No acknowledged write for longer than the command's
+  `ttl_ms` (clamped to 50–1000 ms like the firmware; 250 ms by default) while the
+  link is up: status `healthy: false`, `reason: "belt not acknowledging"`. Past
+  that point the firmware's own TTL has expired. The hub also switches to sending
+  the fault pattern, so any write that does get through matches the status.
+- **Recovery.** Three acknowledged writes in a row clear it.
+- **Reconnect.** A write not acknowledged within 1 s, or 15 write errors in a row,
+  drops the connection (the firmware sees a disconnect and plays the fault
+  pattern) and reconnects.
+- **What an acknowledgement proves.** The belt's BLE stack received the bytes.
+  It doesn't prove the main loop applied them (the firmware's 8-entry event queue
+  drops events when full) or that the motors moved.
+- **Old firmware.** If the command characteristic doesn't offer write-with-response,
+  the hub logs a warning and falls back to write-without-response with no
+  acknowledgement check.
+
+None of this has been measured over a real BLE radio yet. Write-with-response
+adds one ATT response per command (15/s) and typically one to two connection
+intervals of latency per write. The hub never waits for it, so the send rate is
+unaffected while the round trip stays under the 66 ms send period. Above that,
+intermediate commands are skipped, and only the newest one is sent. Check the
+acknowledged-write rate on the bench.
 
 ### Meaning of the haptics
 
