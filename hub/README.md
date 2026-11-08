@@ -28,12 +28,14 @@ haptic_hub/
   control.py         runtime settings for the phone / dashboard: pause, belt test,
                      alert range, classifier; pairing code (docs/protocol.md "Control")
   belt/              where commands go
-    ble.py             the ESP32 over BLE (bleak)
+    ble.py             the ESP32 over BLE (bleak); writes with response and reconnects
+    confirm.py         acknowledged-write tracking: "belt not acknowledging" after one TTL
     sim.py             simulator
   viz.py             --show debug window (render() also draws the dashboard preview)
   dashboard/         --dashboard: operator page on http://127.0.0.1:8780/ (plain HTML/JS)
   record.py          opt-in frame recording (--record), wraps any source
   latency.py         per-stage hub latency, logged every 5 s
+  bench/             `haptic-hub bench`: hardware-day belt checks and JSON report
 ```
 
 ## Setup
@@ -72,6 +74,8 @@ uv run haptic-hub run --perception sweep
 # Belt only
 uv run haptic-hub scan
 uv run haptic-hub belt-test
+uv run haptic-hub bench --serial /dev/cu.usbserial-10   # hardware-day checks, pass/fail + JSON report
+uv run haptic-hub bench --belt sim --yes                 # the same flow against the simulator
 
 # Operator dashboard in a browser on this laptop
 uv run haptic-hub run --source webcam --belt sim --dashboard
@@ -92,6 +96,24 @@ own frame rate and loop. With `--belt sim` the terminal shows the belt, e.g.
 `belt LEVELS [ ▃█▃ ]`. It logs a change at most every 0.5 s; add
 `--sim-log-interval 0` to see every change, e.g. the 0.15 s steps of the pause
 and resume cues.
+
+## Bench checks (`haptic-hub bench`)
+
+One command for hardware day: connect (address, RSSI, connect time), motor
+map (operator confirms each motor's position), level ramp, TTL failsafe,
+fault pattern by command and by dropped link, reconnect, and BLE write timing
+(median/p90 time for the write call to return: **not** motor latency). With
+`--serial PORT` it also reads the belt's USB serial log, times TTL expiry from
+`[belt] state -> link-lost` and flags rejected commands or reboots. The
+firmware has no BLE status characteristic, so this is the only automatic way
+to see the TTL lapse. `--only motor-map` re-runs one check. `--yes` skips
+prompts and reports the checks that need a person as UNCONFIRMED. A summary
+table is printed and a JSON report goes to `hub/bench-reports/` (git-ignored).
+Exit code 0 PASS, 1 FAIL, 3 INCOMPLETE, 130 aborted. `--belt sim` runs the whole
+flow against the real `esp32/lib/belt_core` logic compiled for the host (the
+`haptic_hub.sim.firmware` build; falls back to a Python model of the TTL rules,
+with a warning, if there's no C++ compiler). Tests: `tests/test_bench.py`. When to run it, pass
+criteria and what to do on failure: [docs/hardware-bringup.md](../docs/hardware-bringup.md).
 
 ## Dashboard and remote control
 

@@ -258,6 +258,7 @@ async def run_scenario(
         "belt_writes": belt.writes,
         "belt_writes_lost": belt.lost_writes,
         "belt_writes_rejected": belt.rejected,
+        "belt_reconnects": belt.reconnects,
         "status_msgs": len(timeline.statuses),
         "traveled_m": round(world.traveled, 2),
     }

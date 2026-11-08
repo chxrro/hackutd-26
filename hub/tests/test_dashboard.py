@@ -163,6 +163,9 @@ def test_preview_without_result_is_the_raw_frame():
         ({"reason": "belt disconnected", "paused": True, "belt": "disconnected"}, "fault", "FAULT: belt disconnected"),
         ({"reason": "resuming alerts", "paused": False, "belt": "connected"}, "test", "Resuming alerts"),
         ({"reason": None, "paused": False, "belt": "disconnected"}, "fault", "FAULT: belt disconnected"),
+        ({"reason": "belt disconnected", "paused": False, "belt": "disconnected"}, "fault", "FAULT: belt disconnected"),
+        ({"reason": "belt not acknowledging", "paused": False, "belt": "connected"}, "fault", "FAULT: belt not acknowledging"),
+        ({"reason": "belt not acknowledging", "paused": True, "belt": "connected"}, "fault", "FAULT: belt not acknowledging"),
     ],
 )
 def test_banner(status, level, title):

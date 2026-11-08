@@ -31,6 +31,7 @@ from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
 
+from haptic_hub.belt.confirm import NOT_ACKNOWLEDGING_REASON
 from haptic_hub.control import (
     ALERT_RANGES,
     BELT_TEST_REASON,
@@ -109,8 +110,11 @@ def banner(status: dict[str, Any]) -> dict[str, str]:
     if reason == RESUME_REASON:
         return {"level": "test", "title": "Resuming alerts", "detail": "The belt plays the resume cue. These vibrations are not obstacles."}
     if reason is not None:
-        if paused and belt_link_reason(belt) == reason:
-            detail = "Alerts are paused too. Commands are not reaching the belt."
+        if reason == NOT_ACKNOWLEDGING_REASON:
+            detail = ("The belt is not confirming the hub's commands. It may be playing the fault pattern, "
+                      "or nothing. Do not rely on it." + (" Alerts are paused too." if paused else ""))
+        elif belt_link_reason(belt) == reason:
+            detail = "Commands are not reaching the belt." + (" Alerts are paused too." if paused else "")
         elif paused:
             detail = "Alerts are paused too, but the belt plays the fault pattern. Do not rely on it."
         else:

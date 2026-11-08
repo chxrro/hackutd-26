@@ -8,6 +8,7 @@ not simulate the ESP32 radio, PWM, motors, power, or the boot self-test.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ctypes
 import hashlib
 import os
@@ -18,7 +19,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
 
-from haptic_hub.protocol import BeltCommand, encode_belt_command
+from haptic_hub.protocol import BeltCommand
 
 _HERE = Path(__file__).resolve().parent
 _SHIM = _HERE / "belt_capi.cpp"
@@ -136,45 +137,127 @@ class BeltSample:
 class LinkFaults:
     """Radio problems the sim can inject between hub and belt."""
 
-    drop_writes: bool = False  # writes are lost but the link stays up (TTL must catch it)
-    disconnected: bool = False  # BLE link dropped (firmware gets onLinkLost)
+    drop_writes: bool = False  # writes are lost (never acknowledged) but the link stays up
+    disconnected: bool = False  # BLE link dropped (firmware gets onLinkLost); reconnects fail meanwhile
+
+
+# The fake radio's timings. Assumptions, not measurements: a write-with-response
+# is acknowledged a couple of BLE connection intervals later; a reconnect to a
+# known address takes a moment. The real hub retries after 1 s (doubling); the
+# sim retries sooner so scenarios stay short.
+ACK_RTT_S = 0.02
+CONNECT_S = 0.05
+SIM_RECONNECT_DELAY_S = 0.2
+SIM_MAX_RECONNECT_DELAY_S = 0.4
+
+
+class SimRadioClient:
+    """Stands in for bleak.BleakClient between the hub's real BleBelt and the
+    emulated firmware: writes are decoded by belt_core, acknowledged after
+    ACK_RTT_S, or silently lost (never acknowledged) while drop_writes is on."""
+
+    def __init__(self, belt: EmulatedBelt, target: str, disconnected_callback=None) -> None:  # noqa: ANN001
+        self.belt = belt
+        self.address = str(target)
+        self.is_connected = False
+        self._on_disconnect = disconnected_callback
+
+    async def connect(self) -> None:
+        await asyncio.sleep(CONNECT_S)
+        if self.belt.faults.disconnected:
+            raise TimeoutError("sim: belt out of range")
+        self.is_connected = True
+        self.belt._radio = self
+
+    async def read_gatt_char(self, uuid: str) -> bytes:
+        return bytes([1, self.belt.motors])  # [protocol_version, motor_count]
+
+    async def write_gatt_char(self, uuid: str, data: bytes, response: bool = False) -> None:
+        belt = self.belt
+        belt.writes += 1
+        if not self.is_connected:
+            raise OSError("sim: not connected")
+        if belt.faults.drop_writes:
+            belt.lost_writes += 1
+            if response:
+                await asyncio.Event().wait()  # no Write Response ever comes
+            return
+        if belt.fw.on_payload(bytes(data), belt._now_ms()) != 0:
+            belt.rejected += 1
+        if response:
+            await asyncio.sleep(ACK_RTT_S)
+
+    async def disconnect(self) -> None:
+        if self.is_connected:
+            self.is_connected = False
+            self.belt.fw.on_link_lost(self.belt._now_ms())  # the firmware's onDisconnect
+
+    def drop_link(self) -> None:
+        if self.is_connected:
+            self.is_connected = False
+            if self._on_disconnect is not None:
+                self._on_disconnect(self)
 
 
 @dataclass
 class EmulatedBelt:
-    """Implements haptic_hub.belt.base.Belt. Commands go through the real wire
-    encoding into the real firmware logic; the firmware loop runs every 5 ms and
-    every output is recorded for the scenario checks."""
+    """Implements haptic_hub.belt.base.Belt by running the hub's real BleBelt
+    (write-with-response, acknowledgement window, reconnects) over SimRadioClient
+    into the real firmware logic. The firmware loop runs every 5 ms and every
+    output is recorded for the scenario checks."""
 
     motors: int
     t0: float = field(default_factory=time.monotonic)
     faults: LinkFaults = field(default_factory=LinkFaults)
     samples: list[BeltSample] = field(default_factory=list)
-    writes: int = 0
+    writes: int = 0  # radio writes attempted by the hub's BleBelt
     lost_writes: int = 0
     rejected: int = 0
 
     def __post_init__(self) -> None:
+        from haptic_hub.belt.ble import BleBelt
+
         self.fw = BeltFirmware(self.motors)
-        self._seq = 0
+        self._radio: SimRadioClient | None = None
         self._was_disconnected = False
+        self.ble = BleBelt(self.motors, address="sim-belt", client_factory=lambda target, **kw: SimRadioClient(self, target, **kw))
+        self.ble.RECONNECT_DELAY_S = SIM_RECONNECT_DELAY_S
+        self.ble.MAX_RECONNECT_DELAY_S = SIM_MAX_RECONNECT_DELAY_S
 
     def _now_ms(self) -> int:
         return int((time.monotonic() - self.t0) * 1000)
 
     @property
     def state(self) -> str:
-        return "disconnected" if self.faults.disconnected else "simulated"
+        return self.ble.state
+
+    @property
+    def fault(self) -> str | None:
+        return self.ble.fault
+
+    @property
+    def reconnects(self) -> int:
+        return self.ble.reconnects
 
     async def run(self) -> None:
-        while True:
-            self.tick()
-            await asyncio.sleep(FIRMWARE_LOOP_MS / 1000)
+        link = asyncio.create_task(self.ble.run(), name="sim-ble")
+        try:
+            while True:
+                if link.done():
+                    link.result()  # surface a crash in the hub's BLE code
+                self.tick()
+                await asyncio.sleep(FIRMWARE_LOOP_MS / 1000)
+        finally:
+            link.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await link
 
     def tick(self) -> BeltSample:
         now_ms = self._now_ms()
         if self.faults.disconnected and not self._was_disconnected:
             self.fw.on_link_lost(now_ms)
+            if self._radio is not None:
+                self._radio.drop_link()
         self._was_disconnected = self.faults.disconnected
         state, levels = self.fw.update(now_ms)
         fault = state == FirmwareState.LINK_LOST or (state == FirmwareState.ACTIVE and self.fw.last_mode == 2)
@@ -187,13 +270,7 @@ class EmulatedBelt:
         return self.samples[-1] if self.samples else None
 
     async def send(self, cmd: BeltCommand) -> None:
-        self._seq = (self._seq + 1) & 0xFF
-        self.writes += 1
-        if self.faults.disconnected or self.faults.drop_writes:
-            self.lost_writes += 1
-            return
-        if self.fw.on_payload(encode_belt_command(cmd, self._seq), self._now_ms()) != 0:
-            self.rejected += 1
+        await self.ble.send(cmd)
 
     async def close(self) -> None:
-        pass
+        await self.ble.close()

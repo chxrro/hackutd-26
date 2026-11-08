@@ -120,6 +120,7 @@ class Control:
         self._resume_pending = False
         self._resume_started: float | None = None
         self.belt_state: str | None = None  # kept current by the hub's belt loop
+        self.belt_fault: str | None = None  # likewise (Belt.fault)
         self._lock = asyncio.Lock()
         self._paired: weakref.WeakSet[Any] = weakref.WeakSet()
         self._tasks: set[asyncio.Task[Any]] = set()
@@ -192,6 +193,8 @@ class Control:
             return "belt test already running"
         if self.belt_state is not None and belt_link_reason(self.belt_state) is not None:
             return "belt not connected"
+        if self.belt_fault is not None:
+            return self.belt_fault
         self._test_started = self._clock()
         log.info("control: belt test")
         return None
@@ -300,39 +303,54 @@ class Control:
         motor = min(motors - 1, int(elapsed / duration * motors))
         return BeltCommand(BeltMode.LEVELS, tuple(BELT_TEST_LEVEL if i == motor else 0 for i in range(motors)), ttl_ms)
 
-    def apply(self, cmd: BeltCommand, health: Health, belt_state: str, now: float) -> tuple[BeltCommand, str | None]:
+    def apply(
+        self, cmd: BeltCommand, health: Health, belt_state: str, now: float, belt_fault: str | None = None
+    ) -> tuple[BeltCommand, str | None]:
         """The policy's command and the safety verdict -> what the belt actually gets,
-        and the status reason (None = healthy)."""
-        self.belt_state = belt_state
+        and the status reason (None = healthy).
+
+        belt_fault is the belt's own report that it isn't confirming commands while
+        its link is up (Belt.fault, e.g. "belt not acknowledging").
+
+        Reason precedence: input/perception faults, then the belt link (disconnected
+        or connecting), then the belt not acknowledging, then pause / resume cue.
+        A belt test gives way to belt problems only; nothing else changed there."""
+        self.belt_state, self.belt_fault = belt_state, belt_fault
         motors, ttl = len(cmd.levels), cmd.ttl_ms
+        link = belt_link_reason(belt_state)
+        unconfirmed = belt_fault if link is None else None
+        if (link or unconfirmed) is not None and self._test_started is not None:
+            log.info("control: belt test stopped (%s)", link or unconfirmed)
+            self._test_started = None
         if (test := self._belt_test_command(now, motors, ttl)) is not None:
             self._resume_started = None  # a pending resume cue plays after the test
             return test, BELT_TEST_REASON  # these vibrations are not obstacles
-        link = belt_link_reason(belt_state)
+        if not health.ok:
+            # A real fault wins over pause and cues: the fault pattern goes out.
+            # While paused, the pause cue plays again once the fault clears, so the
+            # wearer knows the silence that follows is the pause, not "fault over".
+            self._pause_started = self._resume_started = None
+            return (BeltCommand.fault(motors, ttl) if self.paused else cmd), health.reason
+        if link is not None:  # the belt can't hear us; its firmware plays the fault itself
+            self._pause_started = self._resume_started = None
+            return BeltCommand.off(motors, ttl), link
+        if unconfirmed is not None:
+            # Writes may still get through now and then: if one does, it must be the
+            # fault pattern, matching what the status says.
+            self._pause_started = self._resume_started = None
+            return BeltCommand.fault(motors, ttl), unconfirmed
         if self.paused:
-            if not health.ok:
-                # A real fault wins over pause: the policy's fault pattern goes out.
-                # The pause cue plays again once the fault clears, so the wearer
-                # knows the silence that follows is the pause, not "fault over".
-                self._pause_started = None
-                return BeltCommand.fault(motors, ttl), health.reason
-            if link is not None:  # the belt can't hear us; its firmware plays the fault itself
-                self._pause_started = None
-                return BeltCommand.off(motors, ttl), link
             if self._pause_started is None:
                 self._pause_started = now
             levels = cues.paused_levels(now - self._pause_started, motors, self.cfg.haptics.pause_reminder_s)
             return _levels(levels, ttl), PAUSED_REASON
         if self._resume_pending:
-            if not health.ok or link is not None:
-                self._resume_started = None  # faults win; the resume cue waits until the belt can play it
-                return cmd, health.reason
             if self._resume_started is None:
                 self._resume_started = now
             if (levels := cues.play(cues.resume_cue(motors), now - self._resume_started)) is not None:
                 return _levels(levels, ttl), RESUME_REASON  # these vibrations are not obstacles
             self._resume_pending, self._resume_started = False, None
-        return cmd, health.reason
+        return cmd, None
 
     # -- status ------------------------------------------------------------
 

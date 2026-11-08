@@ -17,7 +17,7 @@ World (ray-cast, numpy) --> SimPhone --HB frames over WebSocket--> GlassesServer
 | Real (production code) | Simulated |
 |---|---|
 | WebSocket server and `HB` frame decoding, `Hub` loops, `VisionPerception` fusion (depth bands, percentiles, box-growth TTC), `ClassifiedPerception`, `HapticPolicy`, `SafetyMonitor`, belt wire encoding | camera images (simple flat-shaded renders) |
-| belt firmware decoding plus TTL/fault state machine (`esp32/lib/belt_core`, compiled with the host C++ compiler through `belt_capi.cpp`) | the phone app, Wi-Fi, BLE radio, PWM/motors, the boot self-test |
+| belt firmware decoding plus TTL/fault state machine (`esp32/lib/belt_core`, compiled with the host C++ compiler through `belt_capi.cpp`); the hub's `BleBelt` writer, acknowledgement window and reconnects | the phone app, Wi-Fi, BLE radio (`SimRadioClient`), PWM/motors, the boot self-test |
 | | the models, when `--perception oracle` (default): ground-truth depth and boxes replace Depth Anything and YOLO |
 
 ## Run
@@ -62,9 +62,16 @@ Checks look at the belt firmware's output, which is what the wearer would feel:
 - `fault_within` / `fault_during` / `recovers_within` cover the fault pattern after injected failures.
 - `status_reports` checks the health the phone is told.
 - `no_collision` / `clearance_at_end` apply to the closed-loop walker.
-- Two **invariants** run in every scenario:
+- Three **invariants** run in every scenario:
   - whenever the hub is unhealthy, the belt plays the fault pattern within 150 ms;
+  - whenever the belt has played the fault pattern for 350 ms (one TTL plus slack), the hub is not reporting healthy;
   - after start-up the belt is never idle or dormant.
+
+The belt side runs the hub's real `BleBelt` (write-with-response, acknowledgement
+window, reconnects) over `SimRadioClient`, a fake bleak client that feeds the
+firmware logic. Writes are acknowledged after 20 ms, a connect takes 50 ms, and
+reconnects are retried after 0.2–0.4 s (the real hub waits 1 s, then doubles).
+These are assumptions, not radio measurements.
 
 | Scenario | Covers |
 |---|---|
@@ -76,7 +83,7 @@ Checks look at the belt firmware's output, which is what the wearer would feel:
 | `low_confidence_person`, `flaky_detector`, `noisy_depth` | detections below `detector_conf`, 30% missed detections, depth biased 15% plus noise |
 | `camera_freeze`, `phone_disconnect` | stale or missing frames: fault after `frame_stale_s`, then recovery |
 | `perception_crash`, `perception_stall` | model exceptions and hangs: fault, then recovery |
-| `belt_writes_lost`, `belt_disconnect` | the hub link goes quiet: the **firmware** TTL/link-lost logic plays the fault pattern |
+| `belt_writes_lost`, `belt_disconnect` | the hub link goes quiet: the **firmware** TTL/link-lost logic plays the fault pattern, the phone is told `belt not acknowledging` / `belt disconnected` within one TTL + one status period, and the hub reconnects |
 | `garbage_frames`, `network_latency` | malformed packets and broken JPEGs are rejected without a fault; 200 ±100 ms latency |
 
 Each check was confirmed to fail on a deliberately broken hub:
