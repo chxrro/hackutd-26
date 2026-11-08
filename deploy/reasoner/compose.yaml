@@ -1,0 +1,58 @@
+name: hackutd-reasoner
+services:
+  reasoner:
+    # NVIDIA's Cosmos-compatible image, pinned to its Linux x86_64 manifest.
+    image: vllm/vllm-openai:cosmos3@sha256:1605bf6ae5c0681dc0e263471cf031736c6fe49e921a638c16bf55e371abbfc9
+    platform: linux/amd64
+    entrypoint: ["vllm", "serve"]
+    command:
+      - nvidia/Cosmos3-Edge
+      - --revision
+      - 344d602b128d1bbdacb43b08d0a3626f46343e29
+      - --served-model-name
+      - cosmos3-edge
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --dtype
+      - bfloat16
+      - --max-model-len
+      - "8192"
+      - --max-num-batched-tokens
+      - "8192"
+      - --limit-mm-per-prompt
+      - '{"image":1,"video":1}'
+      - --max-num-seqs
+      - "1"
+      - --gpu-memory-utilization
+      - "0.85"
+      - --enforce-eager
+      - --mm-processor-kwargs
+      - '{"do_resize":true,"min_pixels":4096,"max_pixels":262144}'
+      - --media-io-kwargs
+      - '{"video":{"num_frames":8}}'
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./cache/huggingface:/root/.cache/huggingface
+    shm_size: "2gb"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"
+      interval: 20s
+      timeout: 10s
+      start_period: 20m
+      retries: 3
+    # Avoid unattended restart loops if model loading fails.
+    restart: "no"

@@ -21,3 +21,11 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Private camera analysis reports
+/data/analysis/
+
+# Private numbered camera sessions, calibration captures, downloaded weights
+/data/sessions/
+/data/calibration/
+/models/
