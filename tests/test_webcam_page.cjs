@@ -289,3 +289,15 @@ test('unavailable inference suppresses a previous no-apparent-collision result',
   await f.tick();
   assert.match(f.element('observation').textContent, /^UNKNOWN/);
 });
+
+test('a status outage replaces a previous no-apparent-collision result', async () => {
+  const f = await page();
+  f.serverState({freshness: 'recent', max_frame_age_seconds: 3,
+    result: {captured_at: 101, frame_id: 1, observation: 'NO APPARENT COLLISION DETECTED.',
+      collision: {state: 'not_observed', objects: []}}});
+  await f.tick();
+  assert.equal(f.element('observation').textContent, 'NO APPARENT COLLISION DETECTED.');
+  f.failStatus(); await f.tick();
+  assert.match(f.element('observation').textContent, /^UNKNOWN/);
+  assert.equal(f.element('motion').textContent, '');
+});

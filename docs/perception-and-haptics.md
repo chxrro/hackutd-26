@@ -1,5 +1,14 @@
 # Depth, collision-risk, and belt design investigation
 
+> **The team's belt contract is [docs/protocol.md](protocol.md).** It fixes a
+> 5-motor front belt; vibration = obstacle in that direction relative to the
+> glasses (head), not "move this way"; intensity = urgency (closer or sooner); a
+> distinct fault pattern (double pulse on all motors every 2 s) when the system
+> can't vouch for its output, including BLE disconnect and command timeout. This
+> research note predates that contract. Where it differs (undecided motor count,
+> body-relative regions, cadence-coded urgency, all-motors-off on disconnect),
+> protocol.md wins; change it only through that document.
+
 Research checked November 7, 2026. The live pipeline now uses NVIDIA detections
 and measured optical flow for experimental collision candidates; see
 [the current collision check](collision-check.md). A local CPU replay baseline now implements
@@ -142,8 +151,8 @@ result must not produce a "safe" message.
 
 **Meaning:** a vibration marks an obstacle's location relative to the wearer.
 A left vibration means **potential obstacle on the left**. It never means
-"turn left." We have not chosen motor count, hardware addresses, or a physical
-left/center/right placement; use logical regions until those are confirmed.
+"turn left." Motor count (5) and placement are set by [protocol.md](protocol.md);
+the alternatives below were explored before that decision.
 
 Use the fewest distinguishable patterns initially. Keep motor location for
 obstacle direction and cadence for candidate urgency; calibrate comfortable

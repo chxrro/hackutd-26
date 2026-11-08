@@ -46,7 +46,7 @@ python3 -m venv .venv
 .venv/bin/python scripts/webcam_reasoner.py
 ```
 
-Open `http://127.0.0.1:8765` in a Mac browser with camera permission. Refresh after
+Open `http://127.0.0.1:8770` in a Mac browser with camera permission. Refresh after
 code updates, enable the camera, then select **Start live**. Preview is local;
 submitting the first frame starts the configured Brev VM and inference session.
 If a prior session finished, choose **New analysis session**, then enable the
@@ -108,6 +108,36 @@ OpenCV variant differ; do not combine them with the root NVIDIA environment.
 The GitHub handoff did not rerun hub, firmware, iOS, physical camera, Ray-Ban,
 network-to-belt, walking, metric-distance, or real collision-validation tests.
 No new GPU calls are required just to reproduce the local test suites.
+
+## Ports, fixes and hub integration — November 7, 2026
+
+Agreed with Nathan after a review of PR #3:
+
+- **Ports moved off the hub's.** The page now defaults to `127.0.0.1:8770`
+  (8765 is the hub's glasses WebSocket). The SSH tunnel's local end is
+  `127.0.0.1:8001` (8000 is the hub's documented port-forward for its cloud
+  classifier); the VM side stays on 8000. `scripts/reasoner.py` defaults to 8001.
+  On macOS, binding 127.0.0.1 and 0.0.0.0 to the same port both succeed, so the
+  old overlap misrouted local connections silently instead of failing.
+- **Fixes:** the page replaces the observation with `UNKNOWN` when `/status`
+  fails (a previous "no apparent collision" stayed on screen before); SIGHUP
+  (closing the terminal) now requests a GPU stop like Ctrl+C; after a failed
+  stop the watchdog retries every 30 s until Brev confirms STOPPED; the tunnel
+  can't start after a concurrent stop; `brev ls` rows match the exact instance
+  name; null model content and non-JSON/incomplete HTTP replies are an unknown
+  result or a retry instead of ending the session; calibration outputs default
+  to the repo's ignored `data/calibration/` from any working directory.
+- **Still open:** a hard kill, crash or Mac sleep between `brev start` and the
+  VM timer install still leaves the VM running until someone stops it. Keep the
+  Mac awake and the server attended during startup.
+- **Hub integration:** the optical-flow approach/crossing check is being ported
+  into `hub/` as `--motion flow` (branch `chxrro/hub-flow-motion`), feeding the
+  hub's per-sector risk. Once both are on `main`, `scripts/visual_motion.py`
+  should import the hub module instead of keeping a second copy.
+- **Checks after these fixes:** 74 Python tests (1 skipped: real NanoDet replay
+  needs the model download), 28 JavaScript tests, py_compile, `node --check`,
+  `pip check`. Each new regression test failed on the previous code. No GPU,
+  Brev, camera or belt test was run.
 
 ## Useful next work
 

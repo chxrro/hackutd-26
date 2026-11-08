@@ -252,6 +252,9 @@ if (typeof document !== 'undefined') {
     if (statusUnavailable || uploadUnavailable) showUnavailable();
   }
   function showUnavailable() {
+    // Replace the observation itself: a previous "no apparent collision" must not stay on screen.
+    $('observation').textContent = 'UNKNOWN — current assessment unavailable.';
+    $('motion').textContent = '';
     $('age').textContent = 'UNAVAILABLE / STALE · do not use the previous observation as a current alert.';
   }
   async function status() {

@@ -77,7 +77,8 @@ def interpret_image(base_url: str, model: str, data_url: str,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--base-url', default='http://127.0.0.1:8000/v1')
+    parser.add_argument('--base-url', default='http://127.0.0.1:8001/v1',
+                        help='Local end of the SSH tunnel (webcam_reasoner.TUNNEL_PORT)')
     parser.add_argument('--timeout', type=float, default=60)
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('health', help='Verify that the model is listed by the API')

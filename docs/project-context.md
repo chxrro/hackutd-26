@@ -130,7 +130,7 @@ For each important decision, record the date, choice, reason, and evidence or re
 - The owner requested a MacBook-camera test of `hackutd-reasoner` and notice before any action expected to exceed $3. This authorizes a bounded inference test when camera frames are available.
 - Added a standard-library local camera page/server: `python3 scripts/webcam_reasoner.py`, then open `http://127.0.0.1:8765` in a Mac browser. Preview does not start compute; the first submitted frame starts the existing VM and a 20-minute test deadline (about $0.49 compute at the recorded rate, plus storage and shutdown time).
 - The server requests instance shutdown at the deadline or on inference failure. Before loading the model it requires a second shutdown timer on the VM, which remains unverified until first use. Keep the Mac awake during initial setup.
-- The page sends individual frames on demand, reports frame age/latency/tokens, and stores no footage on disk. This is a development webcam substitute, not Ray-Ban integration or a collision-risk validation.
+- The page sends individual frames on demand, reports frame age/latency/tokens, and stores no footage on disk. *(Superseded: completed analyses now save reduced JPEGs in `data/sessions/`; see below.)* This is a development webcam substitute, not Ray-Ban integration or a collision-risk validation.
 - Thirteen local protocol/lifecycle tests passed, along with Python compile and whitespace checks. The shared browser reported camera permission as denied. No MacBook-camera frame has been analyzed and the GPU has not been restarted for this setup; `brev ls` confirmed `STOPPED`. The stopped-instance dashboard displayed $0.02/hour for retained storage.
 
 ## Camera-session shutdown confirmation — November 7, 2026
@@ -155,7 +155,7 @@ For each important decision, record the date, choice, reason, and evidence or re
 ## Persistent frame analysis records — November 7, 2026
 
 - The owner explicitly requested persistent storage of frame analyses. Added `scripts/analysis_log.py` and enabled it in the webcam server for both manual and live captures. The standalone image CLI is unchanged.
-- Completed responses append to `data/analysis/frames.jsonl` by default, with session/frame IDs, capture/completion times (Unix seconds and UTC), model observation/ID, latency, frame age, completion staleness/activity, and token counts. Each record is flushed and synced before acknowledgment. Server restarts append without overwriting older records; a custom file is supported with `--analysis-log`.
+- *(Superseded: the default is now numbered `data/sessions/session_NNNNNN/` folders; `--analysis-log` keeps this aggregate file optional.)* Completed responses append to `data/analysis/frames.jsonl` by default, with session/frame IDs, capture/completion times (Unix seconds and UTC), model observation/ID, latency, frame age, completion staleness/activity, and token counts. Each record is flushed and synced before acknowledgment. Server restarts append without overwriting older records; a custom file is supported with `--analysis-log`.
 - The logger uses an explicit field allowlist. Raw image payloads, request bodies, authorization headers, and arbitrary API metadata are not serialized. The default folder is Git-ignored and the initialized file has owner-only (0600) permissions. Text analyses remain local until manually removed.
 - Completed responses suppressed by pause/stop are still logged with their activity state. Replaced/rejected frames and requests without a completed response produce no invented analysis records. Write failure is surfaced, requests GPU shutdown, and keeps any available unsaved response in memory for recovery.
 - Passed: **31 Python tests**, **7 JavaScript tests**, Python compilation, JavaScript syntax, and whitespace checks. New temporary-file tests verify append persistence across sessions, text/newline handling, field exclusions, private permissions, successful worker persistence, suppressed-response persistence, and shutdown on write failure. These tests use synthetic responses and never write fabricated analyses into the real report.
@@ -390,3 +390,11 @@ For each important decision, record the date, choice, reason, and evidence or re
   walking, collision/range or GPU validation. Prior evidence remains separately
   documented. Credentials, recordings, weights, local account config and caches
   are excluded from the published changes.
+
+## PR #3 review follow-up — November 7, 2026
+
+- Agreed with Nathan; owner approved. Details in [the agent handoff](agent-handoff.md#ports-fixes-and-hub-integration--november-7-2026).
+- The NVIDIA webcam page moved from `127.0.0.1:8765` to `127.0.0.1:8770`, and its tunnel's local end from 8000 to 8001, so neither shares a port with the hub (glasses WebSocket 8765; cloud-classifier port-forward 8000). Earlier entries above that mention 8765/8000 describe the old ports.
+- Fixed: stale "no apparent collision" text stayed on the page when the local server stopped answering; closing the terminal didn't request a GPU stop; failed stops weren't retried; a narrow tunnel/stop race; loose `brev ls` matching; null or non-JSON model replies ended the session. Verified with local unit tests only (no GPU, Brev, camera or belt).
+- Known gap kept open: a lost hazard returns to "no apparent collision" after the 5 s track gap ([collision check](collision-check.md#policy-and-uncertainty)).
+- The optical-flow approach/crossing check is being ported into `hub/` behind `--motion flow` (separate branch `chxrro/hub-flow-motion`, synthetic tests only).
