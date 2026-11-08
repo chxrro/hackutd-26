@@ -62,6 +62,7 @@ Perception and alert policy are different tasks. A model may detect an object wi
 | Haptic meaning | Motor = obstacle in that direction (not "move this way"); a distinct fault pattern means "not reliable" | AGENTS.md safety rules |
 | Perception baseline | Depth Anything V2 Metric Small + YOLO11n/ByteTrack box-growth TTC | Pretrained baseline before any fine-tuning |
 | Focus | Owner: prioritize `esp32/` and the hub; the phone app is parked as is | Owner request |
+| Person vs. object | Label each tracked box; local = YOLO's COCO `person` class, cloud = Nemotron 3 Nano Omni (vision) via any OpenAI-compatible endpoint, self-hosted on Brev for the demo (`--classifier local\|nim`) | NVIDIA/Nemotron track. A per-frame cloud round trip can't be the collision path, so the cloud only labels boxes the local tracker already follows, at ≤2 Hz; no reply for 3 s → fault pattern |
 
 ## Status (2026-11-07)
 
@@ -70,6 +71,8 @@ Perception and alert policy are different tasks. A model may detect an object wi
 | `esp32/` | BLE server, PWM motors, TTL/fault failsafe, serial console | builds for `esp32dev`; 13 native logic tests pass | on a real board, motors, wiring, BLE range |
 | `hub/` | glasses WS server, webcam/file/stream sources, depth + YOLO perception, haptic policy, safety monitor, BLE + simulated belt | 27 tests pass (incl. end-to-end with a fake phone and simulated belt); real models ran on a sample video at ~37 ms/frame on Apple MPS | real BLE belt, glasses frames, accuracy of distance/TTC, end-to-end latency |
 | `meta/` | SDK registration/stream, frame forwarding, hub status UI | builds for the simulator; 5 protocol tests pass | on an iPhone with the glasses |
+
+Person/object classification (2026-11-07, `hub/`): implemented with 26 tests (no models or network; includes cloud timeout/429/outage → belt fault). The real detector + local labels ran on two still images (replayed, not live): ~15–18 ms/frame detector-only, ~42–44 ms with depth, on Apple MPS; the labeling step adds no measurable time. A live webcam test was blocked by macOS camera permission for the agent process. Cloud backend measured on 2026-11-07 against vLLM 0.20 serving Nemotron 3 Nano Omni FP8 on 1× Brev L40S, reached through `brev port-forward` from the laptop. The request was the hub's real one: a 512 px JPEG with numbered boxes, asking for JSON. Round trips, from `haptic-hub nim-bench` on two still photos (20 sequential requests each): median 335 ms (p90 404 ms, 5 boxes, 79 KiB) and 297 ms (p90 343 ms, 3 boxes, 21 KiB); the first request took 1.9 s. On a replayed 15 s clip with the background labeler: 26 replies, median 321 ms, max 882 ms, no failures, and per-frame processing stayed at ~22 ms. Forcing a 50 ms timeout against the real server faulted after the 3 s grace, as designed. In those two photos the cloud called a person cut off at the frame edge "object", and a tie box "person". That is an example, not an accuracy figure. Label accuracy is not measured. No live webcam or glasses run with the cloud yet. Too slow for per-frame collision alerts, so the cloud only labels boxes in the background (hybrid).
 
 None of the perception thresholds have been validated against measured distances.
 
