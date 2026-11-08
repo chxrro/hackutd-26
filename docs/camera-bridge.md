@@ -1,39 +1,83 @@
-# Camera Bridge
+# Camera Bridge (iPhone app)
 
-Camera Bridge is a standalone diagnostic for previewing frames in the iPhone app or a local browser. Start with the built-in test pattern, then switch to the Ray-Ban camera in Meta Developer Mode. For the integrated iPhone-to-belt pipeline, see the [Meta phone bridge](../meta/README.md).
+Camera Bridge (`ios/`) is the team's iPhone app for the Ray-Ban Meta glasses and the haptic belt. Ethan Hur built it as a standalone camera diagnostic (commit `3e8d956`). The owner chose it as the user-facing app, and it now streams the glasses camera to the hub over the WebSocket protocol in [docs/protocol.md](protocol.md). His HTTP viewer path is still available under **Setup → Advanced: diagnostic viewer**.
 
-## Run the test pattern
+This is an experimental collision-alert aid for a supervised prototype. It does not replace a cane, a guide dog or a sighted guide. **Silence does not mean the path is clear.**
 
-1. Connect the iPhone and Mac to the same trusted Wi-Fi. From the repo root on the Mac, run:
+## Two screens
 
-   ```sh
-   python3 desktop/viewer.py --listen 0.0.0.0
-   ```
+- **Belt alerts** (the default, for the person wearing the belt) has one large **Start/Stop** button and one sentence of state, built for VoiceOver first. While a control code is set it also has **Pause/Resume**.
+  - "Alerts on" appears only when the hub link is up, a status arrived in the last 2 s, the hub reports `healthy: true` with `mode: "levels"`, the belt is connected, and frames are real camera frames.
+  - Everything else is a black-on-yellow warning, never calm: hub not connected, no status from hub, any hub fault reason, no camera frames, paused, belt test, belt connecting or disconnected, and simulated input or output (test pattern, mock glasses, simulated belt).
+  - VoiceOver announcements cover important changes only: fault plus its reason, recovered, paused/resumed, belt disconnected/connected, stopped. They are de-duplicated and rate-limited to one every 3 s. A held announcement is replaced by a newer one, or dropped if the state goes back to what was last spoken. The phone gives a haptic tap for each announcement. Every announcement is also logged under subsystem `com.hackutd26.CameraBridge`, category `announce`.
+  - Optional obstacle-kind speech ("Person ahead", "Object far left") is **off by default**. It names the kind of the strongest vibrating motor's label from `sectors[i].kind`, at most once every 4 s, and repeats the same phrase at most once every 15 s. It describes where an obstacle is. It never says where to walk, and it never says that the path is clear.
+  - **Stop** pauses the hub first (if the control code is set) so the belt turns off explicitly. Without the code, the hub sees frames stop and plays the fault pattern. **Start** resumes the hub if it is paused. If the app goes into the background, it stops the camera without pausing, so the hub plays the fault pattern.
+- **Setup** (for a sighted helper) has the following sections:
+  - **Hub:** hub pairing.
+  - **Connection:** diagnostics, including the link, status age, hub health, belt, frames per second in and sent, control-code state, and recent announcements.
+  - **Glasses:** glasses setup.
+  - **Hub settings:** the classifier, alert range and belt test.
+  - **Recording:** session recording, with a consent prompt before anything is sent.
+  - **Live preview**, shown while running.
 
-   Open `http://127.0.0.1:8765` in a browser on the Mac. The terminal prints a fresh pairing code at startup. Leave the terminal running.
-2. In Xcode 26.4 or newer, open `ios/CameraBridge.xcodeproj`. Xcode resolves the pinned Meta Wearables SDK 1.0.1 when it opens the project. Select your Apple development team under **Signing & Capabilities**, choose the connected iPhone (iOS 17.2 or newer), and run the **CameraBridge** scheme. If Xcode reports a bundle ID conflict, choose a unique bundle ID in the target settings. The test pattern runs without paired glasses or Meta AI registration.
-3. In **Camera Bridge** on the phone, enter `http://your-mac.local:8765` and the pairing code. Use the Mac’s local hostname from **System Settings → General → Sharing**. The Mac’s private IPv4 address is another option. Tap **Send test pattern** and allow Local Network access if prompted.
-4. On the Mac, look for the changing frame counter and **Test pattern · simulated source**. Tap **Stop sending** on the phone. The viewer should clear the image and show **Feed stale** after about two seconds. If the viewer never receives a frame, check the hostname, pairing code, Local Network permission, and whether the Wi-Fi permits connections between devices.
+## Pair with the hub
 
-For an iOS Simulator on the same Mac, start the viewer without `--listen` and enter `http://127.0.0.1:8765` in the app.
+1. On the laptop, in `hub/`, run the hub with the glasses source, for example `uv run haptic-hub run --source glasses`. It prints the address to use and, on hub builds with the Control layer, a 16-character **control code**. The code changes every time the hub restarts.
+2. In **Setup → Hub**, enter the address (`192.168.1.20`, `192.168.1.20:8765` or `ws://laptop.local:8765`) and the control code, then tap **Save and connect**. Addresses must be local: `.local` or a private/loopback IPv4 address, the same rule as the viewer uploader. Leave the code empty to send frames only. Pause, settings, belt test and recording then stay off.
+3. **Connection → Control code** should read **Accepted by the hub**. The app sends `get` on every connect, because pairing belongs to one WebSocket connection. **Rejected** means the code is wrong or the hub restarted. **No reply** means the hub predates the Control layer.
 
-## Connect the Ray-Ban camera
+The address is stored in UserDefaults, and the code in the Keychain for this device only.
 
-1. Pair the glasses in the Meta AI app, enable Meta Developer Mode, and follow the [phone and glasses checklist](meta-setup.md#phoneglasses-checklist). `MetaAppID` is set to `0` in `ios/Info.plist` for local Developer Mode. The project declares Meta’s Bluetooth Classic camera transport. Use a physical iPhone for the glasses check. [Meta iOS configuration](https://github.com/meta/meta-wearables-dat-ios/blob/main/AGENTS.md#step-2-configure-infoplist)
-2. Run **Camera Bridge**. Tap **Connect to Meta AI** and finish registration, then tap **Allow glasses camera access**. Enter the computer address and pairing code and tap **Send glasses feed**. Keep the app in the foreground. If Camera Bridge reports that the app on the glasses needs an update, tap **Open glasses app update** and follow the Meta AI prompts.
-3. For a stationary bench test, wear the glasses and look at a consented test target. Meta says some glasses reject session start while unworn. Confirm movement in the browser, then fold or disconnect the glasses and confirm the viewer clears. Record the phone and glasses models, firmware, and observed frame rate and delay before connecting inference. [Meta session troubleshooting](https://github.com/meta/meta-wearables-dat-ios/issues/265)
+## Connect the Ray-Ban glasses
 
-## Mirror the preview over USB
+1. Pair the glasses in Meta AI and enable Developer Mode, following the [phone and glasses checklist](meta-setup.md#phoneglasses-checklist). `MetaAppID` is `0` in `ios/Info.plist` for local Developer Mode. The plist declares Meta's Bluetooth Classic camera transport (`external-accessory`, `com.meta.ar.wearable`); don't remove it. [Meta iOS configuration](https://github.com/meta/meta-wearables-dat-ios/blob/main/AGENTS.md#step-2-configure-infoplist)
+2. In Xcode 26.4 or newer, open `ios/CameraBridge.xcodeproj`, choose your team under **Signing & Capabilities** (or put `DEVELOPMENT_TEAM` in the gitignored `ios/Signing.local.xcconfig`), and run the **CameraBridge** scheme on the iPhone (iOS 17.2+).
+3. In **Setup → Glasses**, tap **1. Connect to Meta AI**, then **2. Allow glasses camera access**. Each row shows its status, and **Check glasses status** refreshes them without prompting. If the glasses report that their app needs an update, row 3 changes to **Needed**. Wear the glasses and tap **3. Open glasses app update**.
+4. Put the glasses on, then press **Start** on the main screen. Keep the app in the foreground. The screen stays awake while running.
 
-Connect the iPhone to the Mac over USB and mirror its screen in Xcode's Device Hub. In Camera Bridge, tap **Preview test pattern** and look for the changing frame number in the mirrored window. After connecting to Meta AI and granting camera access, wear the glasses and tap **Preview glasses feed**. This displays frames in the app, so the mirrored window works without a computer viewer address, pairing code, or hotspot. Tap **Stop preview** to end the session. The browser viewer is a separate mode for receiving JPEG frames.
+## Test without glasses (Debug builds only)
 
-## Preview behavior
+**Setup → Development: MOCK (simulated)** has a **Use mock glasses** switch. It uses Meta's MockDeviceKit, so frames take the normal camera path into the hub. The wearer screen then shows a **MOCK GLASSES (simulated)** banner and never shows "Alerts on". The hub can't tell mock frames from real ones, so keep mock runs out of any measurement. **Hold frames to hub (test fault)** keeps the camera running but stops sending frames, so the hub reports a fault.
 
-One phone sends JPEGs to `POST /frame` with its pairing code and a `test` or `glasses` source label. The sender skips frames while an upload is in flight. The viewer keeps one frame in memory, clears the display after two seconds without a new frame, and serves the preview only on the computer. That timeout measures time since receipt. Use a trusted network because the preview uses local HTTP. The app stores no recordings.
+The mock feed is `mock-feed.mp4` (HEVC) in the app's Documents folder, or the phone's back camera if there is no file. The simulator has no camera, so make a clip:
 
-To check an unsigned simulator build from the repo root with full Xcode:
+```sh
+ffmpeg -f lavfi -i testsrc2=size=504x896:rate=15 -t 60 -c:v libx265 -tag:v hvc1 -pix_fmt yuv420p mock-feed.mp4
+```
+
+The simulator build must be signed to run locally, which is Xcode's default for simulators and needs no team. The Meta SDK and the Keychain both need it. A build with `CODE_SIGNING_ALLOWED=NO` installs, but turning on mock glasses fails with `WearablesError` and the control code isn't saved.
 
 ```sh
 xcodebuild -project ios/CameraBridge.xcodeproj -scheme CameraBridge \
-  -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+  -destination 'platform=iOS Simulator,name=iPhone 16 Pro' -derivedDataPath build/ios CODE_SIGN_IDENTITY=- build
+xcrun simctl install booted build/ios/Build/Products/Debug-iphonesimulator/CameraBridge.app
+cp mock-feed.mp4 "$(xcrun simctl get_app_container booted com.hackutd26.CameraBridge data)/Documents/"
 ```
+
+Run the hub with `uv run haptic-hub run --source glasses --belt sim --perception sweep`. In the app, set the hub address to `127.0.0.1:8765`, turn on mock glasses, and press Start. The hub log switches from `belt FAULT` to `belt LEVELS`. The wearer screen reads **Warning: simulation only** (mock glasses and simulated belt).
+
+## Checks
+
+```sh
+# Unit tests: protocol golden vectors, state -> sentence/announcement mapping, pairing validation.
+xcodebuild -project ios/CameraBridge.xcodeproj -scheme CameraBridge \
+  -destination 'platform=iOS Simulator,name=iPhone 16 Pro' CODE_SIGN_IDENTITY=- test
+
+# Unsigned device build (no mock code: MockGlasses is #if DEBUG only).
+xcodebuild -project ios/CameraBridge.xcodeproj -scheme CameraBridge -configuration Release \
+  -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
+```
+
+The tests are a hostless bundle that compiles the SDK-free files directly (`ios/Hub`, `ios/Wearer`, `FrameUploader.swift`).
+
+## Advanced: diagnostic viewer
+
+Ethan's original computer viewer still works for checking frames without the hub. It is separate from the hub and the belt.
+
+1. Connect the iPhone and the Mac to the same trusted Wi-Fi. From the repo root on the Mac, run `python3 desktop/viewer.py --listen 0.0.0.0` and open `http://127.0.0.1:8765`. The terminal prints a fresh pairing code.
+2. In Camera Bridge, open **Setup → Advanced: diagnostic viewer**. Enter `http://your-mac.local:8765` and the pairing code, then tap **Send test pattern** or **Send glasses feed**. Allow Local Network access if prompted.
+3. On the Mac, look for the changing frame counter. **Stop sending** clears the viewer after about 2 s (**Feed stale**). If no frame arrives, check the hostname, pairing code, Local Network permission, and whether the Wi-Fi allows device-to-device traffic.
+
+**Preview test pattern** and **Preview glasses feed** show frames on the phone screen instead, for Device Hub mirroring over USB. In the simulator, start the viewer without `--listen` and use `http://127.0.0.1:8765`.
+
+The viewer keeps one frame in memory, clears it after 2 s without a new one, and serves the preview only on the computer. The sender skips frames while an upload is in flight. The app stores no recordings.
