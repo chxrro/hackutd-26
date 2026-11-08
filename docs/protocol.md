@@ -74,9 +74,30 @@ Golden vector (seq=1, capture_ms=1700000000000, 504×896, jpeg=`ff d8 ff d9`):
   but the belt hasn't acknowledged a command for longer than the command TTL, so
   it has stopped following the hub: it may be playing the fault pattern, or
   nothing. The hub reconnects on its own. See "Write acknowledgement" in section 3.
+- Belt status reasons (added 2026-11-08, hub + firmware): with firmware that has
+  the status characteristic (section 3, "Status"), `"belt TTL expired"`,
+  `"belt playing fault pattern"`, `"belt not applying commands"` and
+  `"belt status stale"` also set `healthy: false` while `belt: "connected"`.
 - Reason precedence: camera/perception faults, then `"belt disconnected"` /
-  `"belt connecting"`, then `"belt not acknowledging"`, then `"alerts paused"` /
-  `"resuming alerts"`. A belt problem also ends a running belt test.
+  `"belt connecting"`, then `"belt not acknowledging"`, then the belt status
+  reasons above, then `"alerts paused"` / `"resuming alerts"`. A belt problem
+  also ends a running belt test.
+- `belt_firmware` (optional, added 2026-11-08): what the belt itself last
+  reported, or `null` when it doesn't report (old firmware, simulated belt, not
+  connected). For display and logs; `healthy` and `reason` already account for it.
+
+  ```json
+  "belt_firmware": {"build": "3268a632", "mode": "levels", "seq": 17, "status_age_ms": 40,
+                    "uptime_ms": 123456, "max_duty": 255, "levels": [0, 0, 140, 0, 0]}
+  ```
+
+  `build` is the info characteristic's text (or the status `build_id` in hex),
+  `null` if unknown. `mode` and `levels` are the status fields above.
+  `status_age_ms` is how long ago the hub received it.
+- `belt_confirmed` (optional, added 2026-11-08): `"status"` (the belt's status
+  shows it applied a recent command), `"ack"` (writes are acknowledged, but no
+  matching status: old firmware, or the status isn't confirming), or `null`
+  (nothing confirms the belt is following the hub).
 
 ### Control (WebSocket text JSON, additive, draft 2026-11-07)
 
@@ -176,6 +197,7 @@ silent clear-path signal.
 | Service               | `88368a33-70aa-41e2-b071-4f618af1856a` |
 | Command (write / write-no-response) | `71dbf1b6-d7d2-4208-954b-b8a38e54618f` |
 | Info (read)           | `986b42ae-86e7-4eb6-a579-cd8360e40c0b` |
+| Status (read / notify, added 2026-11-08) | `ba2928d9-3014-49de-8949-bd9933b65d7a` |
 
 Advertised name: `HapticBelt`.
 
@@ -197,6 +219,82 @@ Golden vector (levels, seq=7, ttl=250, levels `[0, 64, 128, 192, 255]`):
 ```
 
 Info payload (read): `[protocol_version, motor_count]`, e.g. `01 05`.
+Since 2026-11-08 (additive) the firmware appends its **build id** as ASCII, at
+most 16 bytes: the first 8 hex digits of its git commit, `+` if it was built
+with uncommitted changes in `esp32/`, or `unknown` if built without git. Readers
+must take the first two bytes as before and treat the rest as optional text.
+
+```text
+01 05 33 32 36 38 61 36 33 32        = v1, 5 motors, build "3268a632"
+```
+
+### Status (belt → hub, read + notify, added 2026-11-08)
+
+Additive: the command and info formats are unchanged, and a hub that never reads
+this characteristic works as before. The firmware **notifies on every mode
+change** (in the same 5 ms loop iteration) and otherwise **at least every
+500 ms** (the current firmware: every 250 ms). A read returns the most recently
+notified value. Fixed binary, little-endian:
+
+| Offset | Size | Field          | Notes |
+|-------:|-----:|----------------|-------|
+| 0      | 1    | version        | `1` |
+| 1      | 1    | mode           | see below |
+| 2      | 1    | seq            | `seq` of the last command the firmware **applied** (`0` if none since boot) |
+| 3      | 2    | command_age_ms | `u16`, ms since that command was applied; `65535` = none, or ≥ 65.535 s |
+| 5      | 4    | uptime_ms      | `u32`, belt `millis()`, wraps after ~49.7 days |
+| 9      | 4    | build_id       | `u32`, the first 8 hex digits of the firmware's git commit as a number (`0` = unknown). The info characteristic has the text form. |
+| 13     | 1    | max_duty       | `kMaxDuty`, the firmware's PWM cap (0–255) |
+| 14     | 1    | count          | number of levels that follow (the belt's motor count) |
+| 15     | n    | levels         | `u8` per motor: what the firmware is driving right now (0–255, index 0 = far left). PWM duty is `min(level, max_duty)`. During the fault pattern this is the pattern's instantaneous level. |
+
+`mode`:
+
+| Value | Name           | The belt is ... |
+|------:|----------------|-----------------|
+| 0     | `idle`         | silent: no command since boot |
+| 1     | `off`          | following an `off` command |
+| 2     | `levels`       | following a `levels` command (active) |
+| 3     | `fault`        | following a `fault` command: fault pattern |
+| 4     | `expired`      | no valid command within the TTL: fault pattern |
+| 5     | `disconnected` | BLE dropped while active: fault pattern |
+| 6     | `dormant`      | the fault pattern ran its 30 s and stopped: silent |
+
+With 5 motors the payload is 20 bytes, which fits one notification at the
+default BLE ATT MTU (23). More than 5 motors needs a larger negotiated MTU, or a
+notification is truncated. The bench console (`pio device monitor`) only runs
+while no hub is connected; its commands show up here with `seq` `0`.
+
+Golden vector (`levels`, seq=7, command_age_ms=40, uptime_ms=123456,
+build_id=`0x1a2b3c4d`, max_duty=255, levels `[0, 64, 128, 192, 255]`):
+
+```text
+01 02 07 28 00 40 e2 01 00 4d 3c 2b 1a ff 05 00 40 80 c0 ff
+```
+
+**How the hub uses it** (hub, 2026-11-08). The hub subscribes when the
+characteristic exists and otherwise falls back to the write acknowledgement alone
+(older firmware). A **matching** status is one whose `seq` is a command the hub
+wrote on this connection less than one command TTL + 250 ms before the hub
+received the notification, with `command_age_ms` within the TTL. It is stronger evidence than a write
+acknowledgement: the firmware's main loop applied the command, not only its BLE
+stack. While the link is up, these make the hub status `healthy: false`:
+
+| `reason` | When |
+|----------|------|
+| `"belt TTL expired"` | The belt reports `expired`, `disconnected` or `dormant`: it isn't following the hub. |
+| `"belt playing fault pattern"` | The belt reports `fault`, but the command it names by `seq` wasn't a `fault` command. |
+| `"belt not applying commands"` | The belt reports `idle`, or its applied `seq` doesn't match a recent hub command (writes are acknowledged but not applied). |
+| `"belt status stale"` | No status notification for over 1 s (twice the promised 500 ms). |
+
+They're checked only after the connection's first matching status, or 1 s after
+the hub's first write if none arrives (so the status from before the hub's first
+command doesn't count). `"belt not acknowledging"` takes precedence over all of
+them. Two matching, non-faulty statuses in a row clear them. While any of them is
+set, the hub sends the fault pattern, like for `"belt not acknowledging"`.
+
+None of this has run over a real BLE radio yet; it is covered by the firmware's
+native tests and the hub's simulator (which runs the firmware's `belt_core`).
 
 ### Write acknowledgement (hub, added 2026-11-08)
 
@@ -216,7 +314,8 @@ never waits on the radio.
   pattern) and reconnects.
 - **What an acknowledgement proves.** The belt's BLE stack received the bytes.
   It doesn't prove the main loop applied them (the firmware's 8-entry event queue
-  drops events when full) or that the motors moved.
+  drops events when full) or that the motors moved. Firmware with the status characteristic
+  (below) reports what it applied.
 - **Old firmware.** If the command characteristic doesn't offer write-with-response,
   the hub logs a warning and falls back to write-without-response with no
   acknowledgement check.
