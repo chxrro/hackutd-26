@@ -191,7 +191,7 @@ def test_unknown_detector_fails_before_loading_models():
 def test_openvocab_boxes_flow_through_vision_and_classifier():
     """Real VisionPerception + ClassifiedPerception, fake YOLOE: a pole in the
     center and a person on the left come out labeled object/person, and the
-    boxes cover the matching belt sectors."""
+    boxes cover the matching belt sectors without claiming collision evidence."""
     prompts = ("person", "pole")
     model = FakeYOLOE([(0, 0.8, 10, 40, 60, 200), (1, 0.7, 170, 20, 210, 210)])
     tracker = OpenVocabTracker("unused.pt", prompts, device="cpu", model=model)
@@ -202,6 +202,9 @@ def test_openvocab_boxes_flow_through_vision_and_classifier():
 
     kinds = [(c.box.label, c.kind, c.origin) for c in result.debug["classified"]]
     assert kinds == [("person", PERSON, "local"), ("pole", OBJECT, "local")]
-    labels = [s.label for s in result.sectors]
-    assert labels[0] == "person" and labels[2] == "pole"
+    # One frame has no approach estimate. Detection labels remain available in
+    # classified boxes, but may not be presented as the cause of a risk.
+    assert all(s.label is None and s.risk == 0 for s in result.sectors)
+    from haptic_hub.control import sector_kinds
+    assert sector_kinds(result, 5) == [PERSON, None, OBJECT, None, None]
     assert perception.DETECTORS == ("yolo", "openvocab")

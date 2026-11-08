@@ -4,6 +4,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <atomic>
 
 #include <belt_protocol.h>
 
@@ -13,6 +14,7 @@ class BleLink {
     enum class Type : uint8_t { Connected, Disconnected, Payload } type;
     uint8_t length = 0;
     uint8_t data[belt::kCommandHeaderSize + belt::kMaxMotors] = {};
+    uint32_t receivedAtMs = 0;  // local diagnostic only; not a wire field
   };
 
   // Starts advertising. `motorCount` and `buildStr` are exposed through the info
@@ -32,4 +34,10 @@ class BleLink {
  private:
   void* queue_ = nullptr;   // FreeRTOS QueueHandle_t, kept opaque to keep headers light
   void* status_ = nullptr;  // NimBLECharacteristic*
+  std::atomic<uint32_t> droppedEvents_{0};
+  uint32_t receivedCommands_ = 0;
+  uint32_t lastReceivedAtMs_ = 0;
+  uint32_t maxReceiveGapMs_ = 0;
+  uint32_t maxQueueDelayMs_ = 0;
+  uint32_t lastDiagnosticAtMs_ = 0;
 };

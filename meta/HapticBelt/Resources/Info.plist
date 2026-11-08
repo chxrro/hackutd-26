@@ -70,9 +70,9 @@
 		<string>com.meta.ar.wearable</string>
 	</array>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Connects to your Meta AI glasses to read the camera.</string>
+	<string>Connects to your Meta AI glasses for the camera and your ESP32 haptic belt for vibration alerts.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>Connects to your Meta AI glasses to read the camera.</string>
+	<string>Connects to your Meta AI glasses for the camera and your ESP32 haptic belt for vibration alerts.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connects to your glasses over Wi-Fi and sends camera frames to the hub laptop on your network.</string>
 	<key>NSBonjourServices</key>

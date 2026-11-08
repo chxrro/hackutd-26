@@ -28,6 +28,9 @@ class SectorRisk:
     nearest_m: float | None = None  # estimated distance; unvalidated monocular estimate
     ttc_s: float | None = None  # estimated time to collision from box growth
     label: str | None = None  # detector class driving the risk, if any
+    evidence: str = "unknown"  # depth | box_ttc | flow_approach | flow_crossing
+    motion: str = "unknown"  # approaching | crossing | unknown (not world-frame motion)
+    track_id: int | None = None
 
 
 @dataclass(frozen=True)

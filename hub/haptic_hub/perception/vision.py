@@ -28,7 +28,7 @@ class VisionPerception:
         self.cfg = cfg
         self._depth = depth
         self._tracker = tracker
-        self._ttc = TtcEstimator()
+        self._ttc = TtcEstimator(robust=cfg.robust_ttc)
 
     def process(self, frame: Frame) -> PerceptionResult:
         started = time.perf_counter()
@@ -43,6 +43,9 @@ class VisionPerception:
         nearest: list[float | None] = [None] * n
         ttc: list[float | None] = [None] * n
         label: list[str | None] = [None] * n
+        evidence = ["unknown"] * n
+        motion = ["unknown"] * n
+        track_ids: list[int | None] = [None] * n
         debug: dict = {"infer_size": (w, h)}
 
         if self._depth is not None:
@@ -51,29 +54,32 @@ class VisionPerception:
             for i, d in enumerate(depth_sector_nearest(depth, n, cfg.band_top, cfg.band_bottom, cfg.depth_percentile)):
                 nearest[i] = d
                 risk[i] = linear_risk(d, cfg.near_m, cfg.far_m)
+                if risk[i] > 0:
+                    evidence[i] = "depth"
 
         if self._tracker is not None:
             boxes = self._tracker.track(bgr)
             debug["boxes"] = boxes
-            best_box_height = [0.0] * n
             for box in boxes:
                 if box.height / h < cfg.min_box_height:
                     continue
                 box_ttc = None
                 if box.track_id is not None:
-                    box_ttc = self._ttc.update(box.track_id, frame.received_at, box.height)
+                    clipped = box.x1 <= 1 or box.y1 <= 1 or box.x2 >= w - 1 or box.y2 >= h - 1
+                    box_ttc = self._ttc.update(box.track_id, frame.received_at, box.height, clipped=clipped)
                 box_risk = linear_risk(box_ttc, cfg.ttc_near_s, cfg.ttc_far_s)
                 for s in box_sectors(box.x1, box.x2, w, n):
                     if box_risk > risk[s]:
                         risk[s] = box_risk
+                        label[s] = box.label
+                        evidence[s] = "box_ttc"
+                        motion[s] = "approaching"
+                        track_ids[s] = box.track_id
                     if box_ttc is not None and (ttc[s] is None or box_ttc < ttc[s]):
                         ttc[s] = box_ttc
-                    if box.height > best_box_height[s]:  # name the biggest object in the sector
-                        best_box_height[s] = box.height
-                        label[s] = box.label
             self._ttc.prune(frame.received_at)
 
-        sectors = tuple(SectorRisk(risk[i], nearest[i], ttc[i], label[i]) for i in range(n))
+        sectors = tuple(SectorRisk(risk[i], nearest[i], ttc[i], label[i], evidence[i], motion[i], track_ids[i]) for i in range(n))
         return PerceptionResult(
             frame_seq=frame.seq,
             frame_received_at=frame.received_at,

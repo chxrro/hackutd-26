@@ -485,3 +485,77 @@ belt commands go into the real belt firmware logic built for the host. It runs
 scripted scenarios (obstacle direction, approaching people, head motion, stale
 frames, disconnects, crashes, lost belt writes) and checks what the belt does.
 Results are simulation only. See [haptic_hub/sim/README.md](haptic_hub/sim/README.md).
+
+## Phone hazard attribution
+
+Hub status now includes the additive `hazards` snapshot described in
+[the protocol](../docs/protocol.md#attributed-hazards-additive-2026-11-08).
+It references the perception result used for the motor command and attaches
+labels/motion only from the evidence that won each sector's risk comparison.
+Depth-only alerts remain unlabeled. This supports the `meta/` speech/phone-haptic
+build without changing ESP32 packets or risk thresholds.
+
+For the experimental crossing/approach path on the local bench:
+
+```bash
+uv run haptic-hub run --source glasses --perception vision --belt sim --device mps --classifier local --motion flow --show
+```
+
+Flow remains opt-in and can only raise risk. This build does not fix hand
+false alerts or establish real-world motion accuracy. Evaluate recorded/labeled
+head turns, approaches, crossings and hands before changing thresholds.
+
+## Experimental stable alert profile and offline comparison
+
+The default remains `--alert-profile baseline`. Try the opt-in profile with:
+
+```bash
+uv run haptic-hub run --source glasses --perception vision --motion flow \
+  --device mps --classifier local --belt sim --show --alert-profile stable
+```
+
+`stable` changes two parts of the decision path; it does not train or replace
+Depth Anything / YOLO:
+
+- New moderate-risk alerts require at least three distinct frames spanning
+  200 ms. Repeated belt heartbeats never count as evidence. A quiet observation,
+  timestamp/sequence restart, fault, or gap over 300 ms resets confirmation.
+- Risk at or above 0.8 bypasses confirmation immediately. This is a heuristic
+  score, not a collision probability. Rising urgency for an active alert is
+  immediate. Falling alerts decay with a 150 ms time constant rather than with
+  frame count. Motor TTL and fault behavior remain in force.
+- Box-growth TTC uses a robust inverse-height trend and requires at least four
+  samples spanning 150 ms, fit R² ≥ 0.8, and a consistent current box. Clipped
+  boxes, abrupt height changes, missing intervals, and invalid measurements
+  reset the fit. Rejected motion is unknown, not proof of a stationary object.
+  Depth and optical-flow risk remain available, including at image edges.
+
+Tradeoff: moderate new warnings gain at least 200 ms of delay (longer at low
+frame rates), and motion-quality gates can miss genuine approach. Near hands
+can still produce immediate high-risk depth alerts. This is **not hand
+recognition**, a validated static/moving classifier, or a clear-path detector.
+The profile must be evaluated in a supervised stationary test before walking.
+The phone's existing vibration and speech automatically follow the resulting
+command snapshot; there is no protocol change or app reinstall for this option.
+
+Compare both profiles on an existing, consented recording without driving a
+belt or uploading frames:
+
+```bash
+uv run haptic-hub evaluate \
+  --session recordings/baseline-20261108-030930/raw/session-001 \
+  --output recordings/baseline-20261108-030930/my-stability-report.json \
+  --device mps --motion flow --max-frames 1000
+```
+
+Use a new output filename. Depth and detector inference run once per frame;
+both profiles reuse those predictions with separate TTC/flow/policy histories.
+The JSON contains parameters, per-frame risks/evidence/levels/decision states,
+alert durations and sector-onset counts. It excludes images. Keep reports under
+ignored `recordings/`; they still describe private activity. The evaluator
+fails on missing images or non-increasing timestamps instead of silently
+claiming a complete comparison. Model loading can download missing weights.
+This is an offline behavior comparison, **not accuracy or live latency**.
+Fewer alerts may be missed obstacles. Label representative intervals before
+judging which profile is better: unobstructed view, hand in view, nearby object,
+head turn, controlled approach and crossing, plus low light and disconnections.

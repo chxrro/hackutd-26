@@ -12,6 +12,75 @@ golden vectors below (each component has a test that checks them).
 
 All multi-byte integers are **little-endian**.
 
+### Optional iPhone → belt BLE route (2026-11-08)
+
+`meta/` can now be the BLE central instead of the laptop. **No wire bytes,
+UUIDs, pin assignments, or version numbers change.** The hub and firmware
+teammates should use exactly one BLE owner for the belt:
+
+```text
+glasses → iPhone → hub inference (--belt sim)
+              ← status JSON with five motor levels
+        iPhone → ESP32 (existing v1 BLE commands)
+```
+
+In this mode the hub's `belt: "simulated"` still describes its own transport.
+It does not mean the phone's belt is simulated. The app displays local BLE
+state, acknowledgement counts, and optional firmware status separately. That
+local telemetry is **not** sent back to the hub, so hub `healthy` alone is not
+confirmation of wearable delivery. Start the hub with `--belt sim`; the iPhone
+refuses to relay healthy levels when the hub reports another belt transport.
+
+The app requires protocol v1, **exactly five motors**, info read support, and
+command writes **with response**. It scans for the existing service UUID and
+lets the user choose a device. It supports the optional status characteristic;
+when absent, it explicitly labels delivery as acknowledgement-only. A present
+status characteristic must support notifications and yield valid v1 packets.
+
+The phone writes at most 15 commands/s, one outstanding ATT write, TTL 250 ms.
+The ESP32 requests 15–30 ms BLE connection intervals with zero peripheral
+latency and 4 s link supervision. These are radio scheduling parameters, not
+motor-command TTLs; the central may negotiate a different interval. Serial
+logs show the actual interval. Hub and phone BLE owners share this firmware
+behavior; no GATT UUIDs or command/status bytes change.
+Every send uses the newest intent; nothing queues behind a pending write.
+The iPhone radio callbacks and heartbeat timer use a dedicated serial queue;
+UI telemetry is sampled at 5 Hz. A queued producer intent retains its original
+200 ms expiry time, so main-thread stalls cannot refresh old obstacle output.
+Delivery older than 250 ms disarms relay and recovers with off commands while
+keeping BLE connected. This does not extend the firmware motor TTL. Only an
+outstanding ATT write with no response for 1 s drops the link; a heartbeat gap
+after an acknowledged write is not mislabeled as a missing acknowledgement.
+Three timely acknowledged writes plus a new matching firmware status (when
+supported) clear the delivery warning; the user must re-enable alerts. Firmware
+confirmation checks recent applied sequence, mode, age, and levels (the same
+TTL + 250 ms association window used by the hub). After a one-second initial
+grace, missing/stale/mismatched status disarms output and begins off-command
+recovery; no status for 3 s drops the connection. The app does not
+automatically re-arm or reconnect after failure.
+
+Relay uses the existing shared assessment: fresh status, fresh frame/result
+ages including locally elapsed time, healthy hub state, valid levels and
+hazard metadata. Faults forward `fault`, quiet forwards `off`, obstacles
+forward all five levels unchanged. `hazards` may be absent for an old hub;
+a malformed present snapshot faults. A 200 ms producer lease prevents the
+BLE heartbeat from replaying old intent if the app's relay watchdog stops.
+The heartbeat independently expires live intent to `fault`.
+
+Relay defaults off. A connected, disabled belt receives `off` heartbeats.
+Stopping the camera disables relay. Leaving the active app stops forwarding
+and disconnects; best-effort off is **not a guarantee of silent disconnect**:
+existing firmware treats link loss/TTL expiry as its fault cue, for up to 30 s
+before dormancy. No firmware stop/reset command was added. A bench motor test
+requests one motor at level 120 for a 200 ms window, then off; if delivery
+fails, the 250 ms firmware TTL bounds the last accepted command. It does not
+prove an exact 200 ms physical pulse. Hub pause/resume/test/session cues are
+not replayed through this status bridge: unhealthy hub states yield `fault`.
+
+Phone-only single/double/triple vibration patterns and its strength slider do
+not alter the belt's spatial output or firmware PWM cap. Real BLE performance,
+glasses/BLE/audio coexistence, and felt motor behavior require bench validation.
+
 ## 1. Phone → hub: camera frames (WebSocket, binary)
 
 The hub listens on `ws://<laptop-ip>:8765/` (port configurable). The phone
@@ -138,6 +207,59 @@ change the belt output.
   shows it applied a recent command), `"ack"` (writes are acknowledged, but no
   matching status: old firmware, or the status isn't confirming), or `null`
   (nothing confirms the belt is following the hub).
+
+### Attributed hazards (additive, 2026-11-08)
+
+`hazards` is an optional snapshot alongside the existing motor `levels`. It
+explains the perception result used to generate that command, not necessarily
+the newest result still waiting for the belt loop. Existing clients ignore it;
+ESP32 commands and frame packets are unchanged. `hub/` publishes it and `meta/`
+consumes it; `ios/` can adopt it independently.
+
+```json
+"hazards": {
+  "version": 1,
+  "frame_seq": 42,
+  "result_age_ms": 80.0,
+  "events": [{
+    "id": "2:flow_crossing:7",
+    "sector": 2,
+    "level": 140,
+    "evidence": "flow_crossing",
+    "motion": "crossing",
+    "label": "person",
+    "track_id": 7
+  }]
+}
+```
+
+- `frame_seq`: frame used for this motor command, or `null` before a result.
+- `result_age_ms`: elapsed hub monotonic time since receipt of that frame,
+  not an unsynchronized phone capture time; `null` if unavailable. Consumers
+  must add elapsed local time since status receipt and reject ages over 1 s.
+- `events`: at most one entry for each nonzero motor in a healthy `levels`
+  command, with exactly matching sector and level. Empty while unhealthy,
+  stale, off, or playing control cues. Empty never means a path is clear.
+- `id`: sector + evidence + track ID (or `-`); stable attribution key, not a
+  globally unique event ID. Repeated snapshots do not mean repeated speech.
+- `sector`: 0–4, camera-image left to right. Head-relative direction must not
+  be described as verified torso heading or a suggested walking direction.
+- `evidence`: `depth`, `box_ttc`, `flow_approach`, `flow_crossing`, or `unknown`.
+- `motion`: `approaching` for box/flow approach, `crossing` for flow crossing,
+  otherwise `unknown`. Approach is relative to the camera, not proof the
+  object itself is moving. These are unvalidated estimates, not confidence scores.
+- `label` and `track_id`: only from the detection whose risk won that sector.
+  Both are `null` for depth-only risk or unknown attribution. A command's
+  smoothed release tail becomes `unknown` when raw risk falls below the
+  deadband, so it does not keep naming a disappeared object.
+
+Consumers must validate the version, ages, sectors, motion/evidence combination,
+and agreement with levels. A malformed present field is not an old-server
+fallback. `meta/` uses a common assessment for phone haptics and speech;
+missing `hazards` on an old hub permits generic obstacle alerts from validated
+levels, without object or motion claims. Speech selects the strongest current
+hazard, prefers center on a tie, and never reads the unrelated `sectors.kind`
+labels as the cause of an alert.
 
 ### Control (WebSocket text JSON, additive, draft 2026-11-07)
 

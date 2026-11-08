@@ -141,6 +141,10 @@ clip_t = 3;                // spring tongue thickness
 clip_gap = 5;              // opening at the bend (waistband thickness)
 clip_tip_gap = 0.8;        // gap at the tongue tip (preload)
 clip_hole_inset = 16;      // screw holes from the box's long outer faces
+nut_af = 5.5;              // M3 hex nut across flats
+nut_t = 2.4;               // M3 hex nut thickness
+nut_clr = 0.4;             // nut-trap clearance (across flats)
+nut_trap_wall = 2;         // wall around the nut trap
 
 /* [Capacitor cradle] */
 cap_d = 10;                // 470 uF can diameter + allowance
@@ -203,6 +207,9 @@ cradle_y = (wall + esp_y0) / 2;
 
 clip_x = esp_x0 + esp_l - 10;                  // clear of pillars and cradle
 clip_hole_y = [clip_hole_inset, W - clip_hole_inset];
+nut_trap_d = (nut_af + nut_clr) / cos(30);    // hex corner-to-corner
+nut_trap_h = nut_t + 0.4;                      // pocket depth above the floor
+nut_trap_od = nut_trap_d + 2 * nut_trap_wall;
 clip_y0 = 4;                                   // clip plate starts here (box y)
 clip_len = W - clip_y0 - 4;
 
@@ -281,6 +288,9 @@ module base() {
             if (uln_rails) uln_support_rails();
             else for (p = uln_holes) translate(p) cylinder(d = uln_standoff_d, h = z_uln_bot);
             cap_cradle();
+            // clip nut traps: raised hex pockets on the floor, open to the inside
+            if (clip_enable) for (y = clip_hole_y) translate([clip_x, y, 0])
+                cylinder(d = nut_trap_od, h = floor_t + nut_trap_h);
             belt_ear(0);
             belt_ear(1);
         }
@@ -295,7 +305,11 @@ module base() {
         if (!uln_rails) for (p = uln_holes) translate([p[0], p[1], 0.8])
             cylinder(d = uln_pilot_d, h = 12);
         // belt-clip screw holes through the floor
-        if (clip_enable) for (y = clip_hole_y) translate([clip_x, y, -1]) cylinder(d = 3.4, h = floor_t + 2);
+        if (clip_enable) for (y = clip_hole_y) translate([clip_x, y, -1]) {
+            cylinder(d = 3.4, h = floor_t + nut_trap_h + 2);
+            translate([0, 0, 1 + floor_t]) rotate(30)
+                cylinder(d = nut_trap_d, h = nut_trap_h + 1, $fn = 6);
+        }
         // USB-C port: U-notch from the rim, closed by the lid
         box_at(-1, port_y - plug_w / 2 - plug_clr, z_port - plug_h / 2 - plug_clr,
                wall + 2, plug_w + 2 * plug_clr, z_top);
@@ -437,7 +451,7 @@ module clip_on_box() {
 module clip_hw() {
     // M3 nuts inside on the floor + screw shanks (for interference checks)
     for (y = clip_hole_y) translate([clip_x, y, floor_t]) {
-        cylinder(d = 6.4, h = 2.6, $fn = 6);
+        rotate(30) cylinder(d = nut_af / cos(30), h = nut_t, $fn = 6);
         cylinder(d = 3, h = 4);
     }
 }
