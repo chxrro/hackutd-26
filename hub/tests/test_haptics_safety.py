@@ -47,11 +47,32 @@ def test_safety_monitor_states():
     assert not mon.check(0.0).ok  # nothing yet
     mon.frame_received(10.0)
     assert mon.check(10.1).reason == "perception warming up"
-    mon.perception_ok(10.2)
+    mon.perception_ok(10.2, frame_received_at=10.0)
     assert mon.check(10.3).ok
     assert "no camera frames" in mon.check(11.5).reason
     mon.frame_received(11.5)
     mon.perception_failed("RuntimeError")
     assert "perception failing" in mon.check(11.6).reason
-    mon.perception_ok(11.7)
+    mon.perception_ok(11.7, frame_received_at=11.5)
     assert mon.check(11.8).ok
+
+
+def test_slow_result_faults_even_though_results_keep_coming():
+    """A result 1.4 s after its frame isn't 'stalled' (< result_stale_s), but the
+    belt would be playing a scene that old."""
+    mon = SafetyMonitor(SafetyConfig(frame_stale_s=1.0, result_stale_s=1.5, result_max_age_s=1.0))
+    mon.frame_received(11.4)  # newer frames keep arriving
+    mon.perception_ok(11.4, frame_received_at=10.0)
+    health = mon.check(11.45)
+    assert not health.ok and health.reason == "perception result is 1.4 s old"
+
+
+def test_old_result_is_not_replayed_after_a_frame_gap():
+    mon = SafetyMonitor(SafetyConfig(frame_stale_s=1.0, result_stale_s=1.5, result_max_age_s=1.0))
+    mon.frame_received(10.0)
+    mon.perception_ok(10.05, frame_received_at=10.0)
+    assert "no camera frames" in mon.check(11.1).reason
+    mon.frame_received(11.2)  # frames resume; the only result is from before the gap
+    assert "1.2 s old" in mon.check(11.2).reason
+    mon.perception_ok(11.25, frame_received_at=11.2)
+    assert mon.check(11.3).ok

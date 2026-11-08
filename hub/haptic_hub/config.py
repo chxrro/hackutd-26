@@ -63,6 +63,7 @@ class HapticsConfig:
 class SafetyConfig:
     frame_stale_s: float = 1.0  # no new camera frame for this long -> fault
     result_stale_s: float = 1.5  # no perception result for this long -> fault
+    result_max_age_s: float = 1.0  # result's frame received longer ago than this -> fault
 
 
 @dataclass
