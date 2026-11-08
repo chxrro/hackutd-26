@@ -13,9 +13,11 @@ Backends:
          their local label and are marked as such
 
 The labels do not change the per-sector risk or the belt output. If the cloud
-backend is selected and stops answering while there are boxes to label,
-``process`` raises ClassifierUnavailable, which the hub turns into the fault
-pattern (never silence).
+backend is selected and stops answering while there are boxes to label, every
+box falls back to its local label and debug["classifier"] says why ("stale",
+"error"). Collision alerts carry on: a labeling outage must not take away the
+belt's depth and TTC risk. If labels ever drive the belt, an unavailable
+classifier has to become a fault (raise ClassifierUnavailable) instead.
 """
 
 from __future__ import annotations
@@ -34,7 +36,8 @@ KINDS = (PERSON, OBJECT)
 
 
 class ClassifierUnavailable(RuntimeError):
-    """The selected classifier can't vouch for its labels (cloud down, timed out, rate limited)."""
+    """The selected classifier can't vouch for its labels (cloud down, timed out, rate limited).
+    Not raised while labels don't drive the belt (see the module docstring)."""
 
 
 @dataclass(frozen=True)
@@ -86,10 +89,11 @@ class ClassifiedPerception:
         if self.cloud is not None:
             infer_size = result.debug.get("infer_size", frame.image.shape[1::-1])
             self.cloud.submit(frame.image, boxes, infer_size, now)
-            if (why := self.cloud.stale_reason(now)) is not None:
-                raise ClassifierUnavailable(why)
-            cloud_labels = self.cloud.labels(now)
             status = self.cloud.status(now)
+            if (why := self.cloud.stale_reason(now)) is None:
+                cloud_labels = self.cloud.labels(now)
+            else:  # can't vouch for cloud labels: every box keeps its local one
+                status = {**status, "stale": True, "error": why}
 
         classified = []
         for box in boxes:

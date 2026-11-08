@@ -9,7 +9,8 @@ the background: draw numbered boxes on a downscaled frame, ask the model which
 are people, cache the answer per track ID. One request is in flight at a time,
 at most ``max_hz`` per second, so a slow endpoint lowers the label rate instead
 of delaying collision alerts. If no reply arrives for ``stale_s`` while there are
-boxes to label, ``stale_reason`` says so and the hub plays the fault pattern.
+boxes to label, ``stale_reason`` says so and ClassifiedPerception falls back to
+the local labels.
 """
 
 from __future__ import annotations
