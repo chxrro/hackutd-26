@@ -14,11 +14,13 @@ from websockets.asyncio.client import connect
 from haptic_hub.app import Hub
 from haptic_hub.belt.sim import SimBelt
 from haptic_hub.config import HubConfig, PerceptionConfig
+from haptic_hub import cues
 from haptic_hub.control import (
     ALERT_RANGES,
     BELT_TEST_LEVEL,
     BELT_TEST_MAX_S,
     PAUSED_REASON,
+    RESUME_REASON,
     Control,
     redact,
     sector_kinds,
@@ -175,24 +177,166 @@ def test_alert_range_presets_change_perception_thresholds():
 # -- pause / fault -----------------------------------------------------------
 
 
-def test_pause_sends_off_with_explicit_reason_and_resume_restores():
+TICK = 1 / 15  # the hub's belt loop rate
+
+
+def _play(c, t0, seconds, cmd=LEVELS, health=OK, belt="connected"):
+    """Run c.apply at the belt loop's rate; returns [(t - t0, command, reason)]."""
+    out, t = [], t0
+    while t < t0 + seconds - 1e-9:
+        out.append((t - t0, *c.apply(cmd, health, belt, t)))
+        t += TICK
+    return out
+
+
+def _quiet_after_cue(c, t0):
+    """Plays the pause cue to its end; returns the time it ended."""
+    end = t0 + cues.duration(cues.pause_cue(5))
+    _play(c, t0, end - t0 + TICK / 2)
+    return end
+
+
+def test_pause_plays_cue_then_stays_quiet_with_explicit_reason_and_resume_restores():
     c = Control(HubConfig())
     assert ack(c, {"type": "control", "id": 1, "action": "pause"})["settings"]["paused"] is True
-    cmd, reason = c.apply(LEVELS, OK, "connected", 0.0)
-    assert cmd.mode == BeltMode.OFF and cmd.levels == (0,) * 5 and cmd.ttl_ms == LEVELS.ttl_ms
-    assert reason == PAUSED_REASON == "alerts paused"
+    ticks = _play(c, 0.0, 1.0)
+    assert {reason for _, _, reason in ticks} == {PAUSED_REASON} and PAUSED_REASON == "alerts paused"
+    felt = [cmd.levels for _, cmd, _ in ticks if cmd.mode == BeltMode.LEVELS]
+    assert felt and all(lv in (cues.CUE_LEVEL, 0) for levels in felt for lv in levels)
+    assert all(cmd.ttl_ms == LEVELS.ttl_ms and cmd.mode != BeltMode.FAULT for _, cmd, _ in ticks)
+    t, cmd, _ = ticks[-1]
+    assert t > cues.duration(cues.pause_cue(5)) and cmd == BeltCommand.off(5, LEVELS.ttl_ms)  # quiet after the cue
     ack(c, {"type": "control", "id": 2, "action": "resume"})
-    assert c.apply(LEVELS, OK, "connected", 0.0) == (LEVELS, None)
+    after = _play(c, 1.0, 1.0)
+    assert after[0][2] == RESUME_REASON == "resuming alerts"
+    assert after[-1][1:] == (LEVELS, None)  # normal levels again
 
 
-def test_faults_win_over_pause_in_status():
+def test_pause_cue_is_outside_in_and_resume_cue_is_inside_out():
     c = Control(HubConfig())
     ack(c, {"type": "control", "id": 1, "action": "pause"})
-    cmd, reason = c.apply(BeltCommand.fault(5), Health(False, "no camera frames for 1.2 s"), "connected", 0.0)
-    assert reason == "no camera frames for 1.2 s" and cmd.mode == BeltMode.OFF
-    assert c.apply(LEVELS, OK, "disconnected", 0.0)[1] == "belt disconnected"
-    assert c.apply(LEVELS, OK, "connecting", 0.0)[1] == "belt connecting"
-    assert c.apply(LEVELS, OK, "simulated", 0.0)[1] == PAUSED_REASON
+    on = [cmd.levels for _, cmd, _ in _play(c, 0.0, 0.8) if any(cmd.levels)]
+    assert _rings_in_order(on) == [(0, 4), (1, 3), (2,)]
+    ack(c, {"type": "control", "id": 2, "action": "resume"})
+    ticks = _play(c, 10.0, 0.8, cmd=BeltCommand.off(5))
+    on = [cmd.levels for _, cmd, reason in ticks if reason == RESUME_REASON and any(cmd.levels)]
+    assert _rings_in_order(on) == [(2,), (1, 3), (0, 4)]
+    resume_ticks = [t for t, _, reason in ticks if reason == RESUME_REASON]
+    assert max(resume_ticks) < cues.duration(cues.resume_cue(5)) <= 0.6 + 1e-9  # bounded
+    assert ticks[-1][1:] == (BeltCommand.off(5), None)
+
+
+def _rings_in_order(levels_seq):
+    seen = []
+    for levels in levels_seq:
+        ring = tuple(i for i, lv in enumerate(levels) if lv)
+        if not seen or seen[-1] != ring:
+            seen.append(ring)
+    return seen
+
+
+def test_pause_reminder_every_15_s_low_and_on_outer_motors():
+    c = Control(HubConfig())
+    ack(c, {"type": "control", "id": 1, "action": "pause"})
+    quiet_from = _quiet_after_cue(c, 0.0)
+    ticks = _play(c, quiet_from, 46.0)
+    pulses = [t for t, cmd, _ in ticks if any(cmd.levels)]
+    assert all(cmd.levels in ((0,) * 5, (110, 0, 0, 0, 110)) for _, cmd, _ in ticks)
+    assert all(reason == PAUSED_REASON for _, _, reason in ticks)
+    starts = [t for i, t in enumerate(pulses) if i == 0 or t - pulses[i - 1] > 1.0]
+    assert [round(t) for t in starts] == [15, 30, 45]
+    assert all(t < 15 + cues.REMINDER_PULSE_S for t in pulses if t < 20)  # each pulse is short
+
+
+def test_pause_reminder_is_configurable_and_can_be_off():
+    cfg = HubConfig()
+    cfg.haptics.pause_reminder_s = 0
+    c = Control(cfg)
+    ack(c, {"type": "control", "id": 1, "action": "pause"})
+    quiet_from = _quiet_after_cue(c, 0.0)
+    assert not any(any(cmd.levels) for _, cmd, _ in _play(c, quiet_from, 60.0))
+    cfg.haptics.pause_reminder_s = 4.0
+    pulses = [t for t, cmd, _ in _play(c, quiet_from, 9.0) if any(cmd.levels)]
+    assert pulses and 4.0 <= pulses[0] < 4.0 + 0.2
+    for bad in (-1.0, 0.5, float("nan")):
+        cfg.haptics.pause_reminder_s = bad
+        with pytest.raises(ValueError):
+            Control(cfg)
+
+
+def test_faults_win_over_pause_on_the_belt_and_in_status():
+    c = Control(HubConfig())
+    ack(c, {"type": "control", "id": 1, "action": "pause"})
+    quiet_from = _quiet_after_cue(c, 0.0)
+    stale = Health(False, "no camera frames for 1.2 s")
+    cmd, reason = c.apply(BeltCommand.fault(5), stale, "connected", quiet_from + 1)
+    assert reason == "no camera frames for 1.2 s" and cmd == BeltCommand.fault(5)
+    cmd, reason = c.apply(BeltCommand.fault(5), Health(False, "perception failing: RuntimeError"), "connected", quiet_from + 2)
+    assert reason.startswith("perception failing") and cmd.mode == BeltMode.FAULT
+    # Even if a caller hands over a non-fault command, an unhealthy verdict sends the fault pattern.
+    assert c.apply(LEVELS, stale, "connected", quiet_from + 3)[0].mode == BeltMode.FAULT
+    assert c.apply(LEVELS, OK, "disconnected", quiet_from + 4)[1] == "belt disconnected"
+    assert c.apply(LEVELS, OK, "connecting", quiet_from + 5)[1] == "belt connecting"
+    assert c.apply(LEVELS, OK, "simulated", quiet_from + 6)[1] == PAUSED_REASON
+    assert c.settings()["paused"] is True  # a fault doesn't unpause
+
+
+def test_fault_interrupts_pause_cue_and_cue_replays_when_fault_clears():
+    c = Control(HubConfig())
+    ack(c, {"type": "control", "id": 1, "action": "pause"})
+    _play(c, 0.0, 0.2)  # cue under way
+    ticks = _play(c, 0.2, 3.0, cmd=BeltCommand.fault(5), health=Health(False, "no camera frames for 1.1 s"))
+    assert all(cmd.mode == BeltMode.FAULT for _, cmd, _ in ticks)
+    replay = [cmd.levels for _, cmd, _ in _play(c, 3.2, 0.8) if any(cmd.levels)]
+    assert _rings_in_order(replay) == [(0, 4), (1, 3), (2,)]  # "still paused", not "fault over, all clear"
+    # same after the belt link drops and comes back
+    _play(c, 4.0, 2.0, belt="disconnected")
+    replay = [cmd.levels for _, cmd, _ in _play(c, 6.0, 0.8) if any(cmd.levels)]
+    assert _rings_in_order(replay) == [(0, 4), (1, 3), (2,)]
+
+
+def test_resume_during_fault_keeps_fault_then_plays_resume_cue():
+    c = Control(HubConfig())
+    ack(c, {"type": "control", "id": 1, "action": "pause"})
+    _quiet_after_cue(c, 0.0)
+    ack(c, {"type": "control", "id": 2, "action": "resume"})
+    stale = Health(False, "no camera frames for 1.5 s")
+    ticks = _play(c, 5.0, 1.0, cmd=BeltCommand.fault(5), health=stale)
+    assert all(cmd.mode == BeltMode.FAULT and reason == stale.reason for _, cmd, reason in ticks)
+    ticks = _play(c, 6.0, 1.0)
+    assert ticks[0][2] == RESUME_REASON
+    assert ticks[-1][1:] == (LEVELS, None)
+
+
+def test_fault_mid_resume_cue_wins():
+    c = Control(HubConfig())
+    ack(c, {"type": "control", "id": 1, "action": "pause"})
+    _quiet_after_cue(c, 0.0)
+    ack(c, {"type": "control", "id": 2, "action": "resume"})
+    _play(c, 5.0, 0.3)
+    cmd, reason = c.apply(BeltCommand.fault(5), Health(False, "perception failing: x"), "connected", 5.3)
+    assert cmd.mode == BeltMode.FAULT and reason == "perception failing: x"
+
+
+def test_pause_and_resume_are_idempotent_and_do_not_replay_cues():
+    c = Control(HubConfig())
+    ack(c, {"type": "control", "id": 1, "action": "resume"})  # not paused: no resume cue
+    assert c.apply(LEVELS, OK, "connected", 0.0) == (LEVELS, None)
+    ack(c, {"type": "control", "id": 2, "action": "pause"})
+    quiet_from = _quiet_after_cue(c, 1.0)
+    ack(c, {"type": "control", "id": 3, "action": "pause"})  # already paused: no new cue
+    assert not any(any(cmd.levels) for _, cmd, _ in _play(c, quiet_from, 1.0))
+
+
+def test_pause_during_resume_cue_cancels_it():
+    c = Control(HubConfig())
+    ack(c, {"type": "control", "id": 1, "action": "pause"})
+    _quiet_after_cue(c, 0.0)
+    ack(c, {"type": "control", "id": 2, "action": "resume"})
+    _play(c, 5.0, 0.3)
+    ack(c, {"type": "control", "id": 3, "action": "pause"})
+    on = [cmd.levels for _, cmd, reason in _play(c, 5.3, 0.8) if any(cmd.levels)]
+    assert _rings_in_order(on) == [(0, 4), (1, 3), (2,)]
 
 
 # -- belt test -----------------------------------------------------------------
@@ -342,22 +486,42 @@ def _run_hub(hub, steps, between):
     return run(scenario())
 
 
-def test_hub_pause_turns_belt_off_and_status_says_why():
-    belt = SimBelt(5)
+class RecordingBelt(SimBelt):
+    """Keeps every command with the hub's status reason at the time it was sent."""
+
+    def __init__(self, motors):
+        super().__init__(motors)
+        self.history = []
+        self.hub = None
+
+    async def send(self, cmd):
+        await super().send(cmd)
+        self.history.append((self.last, self.hub.reason if self.hub else None))
+
+
+def _cue_rings(history, reason):
+    lit = [tuple(i for i, lv in enumerate(c.levels) if lv) for c, r in history if r == reason and any(c.levels)]
+    return [ring for i, ring in enumerate(lit) if i == 0 or lit[i - 1] != ring]
+
+
+def test_hub_pause_plays_cue_then_belt_off_and_status_says_why():
+    belt = RecordingBelt(5)
     hub = Hub(HubConfig(), FakeSource(seconds=30), SweepPerception(5), belt)
+    belt.hub = hub
 
     async def before(h):
         return belt.last.mode, h.status()
 
     async def pause(h):
         await h.control.handle({"type": "control", "id": 1, "action": "pause"}, paired=True)
-        return None
+        return len(belt.history)
 
     async def after(h):
         return belt.last.mode, h.status()
 
-    (mode0, s0), _, (mode1, s1) = _run_hub(hub, [before, pause, after], 0.6)
+    (mode0, s0), paused_at, (mode1, s1) = _run_hub(hub, [before, pause, after], 0.8)
     assert mode0 == BeltMode.LEVELS and s0["healthy"] and s0["paused"] is False
+    assert _cue_rings(belt.history[paused_at:], PAUSED_REASON) == [(0, 4), (1, 3), (2,)]
     assert mode1 == BeltMode.OFF
     assert s1["mode"] == "off" and s1["healthy"] is False and s1["reason"] == "alerts paused" and s1["paused"] is True
     assert s1["settings"]["paused"] is True and len(s1["sectors"]) == 5
@@ -379,7 +543,7 @@ def test_hub_fault_overrides_pause_when_frames_stop():
 
     _, (mode, s) = _run_hub(hub, [pause, later], 0.5)
     assert s["reason"].startswith("no camera frames") and s["paused"] is True and s["healthy"] is False
-    assert mode == BeltMode.OFF  # paused: the belt stays off, but the status reports the fault
+    assert mode == BeltMode.FAULT and s["mode"] == "fault"  # a real fault wins over pause on the belt too
 
 
 def test_hub_belt_test_plays_then_returns_to_normal():
@@ -482,3 +646,23 @@ def cv2_jpeg():
     ok, buf = cv2.imencode(".jpg", np.zeros((8, 8, 3), np.uint8))
     assert ok
     return buf.tobytes()
+
+
+def test_hub_resume_plays_cue_then_normal_levels_return():
+    belt = RecordingBelt(5)
+    hub = Hub(HubConfig(), FakeSource(seconds=30), SweepPerception(5), belt)
+    belt.hub = hub
+
+    async def pause(h):
+        await h.control.handle({"type": "control", "id": 1, "action": "pause"}, paired=True)
+
+    async def resume(h):
+        await h.control.handle({"type": "control", "id": 2, "action": "resume"}, paired=True)
+        return len(belt.history)
+
+    async def after(h):
+        return belt.last.mode, h.status()
+
+    _, resumed_at, (mode, s) = _run_hub(hub, [pause, resume, after], 0.8)
+    assert _cue_rings(belt.history[resumed_at:], RESUME_REASON) == [(2,), (1, 3), (0, 4)]
+    assert mode == BeltMode.LEVELS and s["healthy"] and s["reason"] is None and s["paused"] is False
