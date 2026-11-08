@@ -55,18 +55,15 @@ final class AppModel: ObservableObject {
     /// can check them with `log stream` without VoiceOver.
     private let log = Logger(subsystem: "com.hackutd26.CameraBridge", category: "announce")
     private let epoch = ContinuousClock.now
-    private var gate: AnnouncementGate
+    private var announcer: WearerAnnouncer
     private var speechGate = SectorSpeechGate()
     private var ticker: Task<Void, Never>?
     private var lastRecord: Bool?
     private var resumeAfterStart = false
     private var lastSample: (at: ContinuousClock.Instant, received: Int, stats: FrameForwarder.Stats)?
-    /// The condition whose announcement the wearer last heard, and the one held by the gate.
-    /// "Recovered" / "Resumed" are worded against what was heard, not against a
-    /// short-lived state the rate limit swallowed.
-    private var spokenCondition: WearerCondition?
-    private var heldCondition: WearerCondition?
     private var firstFrameAt: ContinuousClock.Instant?
+    /// When the hub's status first said "resuming alerts" without a break.
+    private var resumingSince: ContinuousClock.Instant?
     /// After the first frame, keep saying "Starting" this long while the hub warms up.
     private static let warmUp: Duration = .seconds(2)
 
@@ -79,8 +76,9 @@ final class AppModel: ObservableObject {
         let saved = PairingStore.load()
         let pairing = saved.address.isEmpty ? nil : try? HubPairing.validate(address: saved.address, code: saved.code).get()
         self.pairing = pairing
-        condition = WearerStatus.condition(WearerInputs(paired: pairing != nil))
-        gate = AnnouncementGate(initialKey: WearerKind.off.key)
+        let initial = WearerStatus.condition(WearerInputs(paired: pairing != nil))
+        condition = initial
+        announcer = WearerAnnouncer(initial: initial)
         forwarder = FrameForwarder(hub: hub.client)
 
         let forwarder = forwarder
@@ -133,8 +131,9 @@ final class AppModel: ObservableObject {
         update()
     }
 
-    /// Stop pauses the hub first (explicit, announced, belt off) when the control
-    /// code allows it. Without it the hub sees frames stop and plays the fault pattern.
+    /// Stop pauses the hub first (explicit: the belt plays the pause cue) when the
+    /// control code allows it. Either way the hub then sees frames stop, and its
+    /// "no camera frames" fault outranks the pause, so the belt plays the fault pattern.
     func stopAlerts() {
         play(.tap)
         resumeAfterStart = false
@@ -249,32 +248,22 @@ final class AppModel: ObservableObject {
         input.status = hub.status
         input.statusAge = hub.statusAge()
         input.cameraFrameAge = bridge.lastFrame.map { Self.seconds($0.duration(to: .now)) }
+        if let status = hub.status, !status.isPaused, status.reason == WearerStatus.resumingReason {
+            let since = resumingSince ?? .now
+            resumingSince = since
+            input.resumingFor = Self.seconds(since.duration(to: .now))
+        } else {
+            resumingSince = nil
+        }
         return input
     }
 
     private func update() {
         let input = inputs()
         let new = WearerStatus.condition(input)
-        if new != condition {
-            let heard = spokenCondition ?? condition
-            condition = new
-            if let text = WearerStatus.announcement(from: heard, to: new) {
-                if let out = gate.submit(Announcement(key: new.kind.key, text: text), now: now) {
-                    spokenCondition = new
-                    post(out, haptic(for: new.tone))
-                } else {
-                    heldCondition = gate.pending == nil ? nil : new
-                }
-            } else {
-                // Back to what the wearer last heard: drop anything held back.
-                gate.dropPending()
-                heldCondition = nil
-            }
-        }
-        if let held = gate.poll(now: now) {
-            spokenCondition = heldCondition ?? condition
-            heldCondition = nil
-            post(held, haptic(for: condition.tone))
+        if new != condition { condition = new }
+        if let out = announcer.update(new, now: now) {
+            post(out.announcement, haptic(for: out.tone))
         }
 
         if UIApplication.shared.isIdleTimerDisabled != isRunning {
@@ -327,7 +316,7 @@ final class AppModel: ObservableObject {
     // MARK: Speech and haptics
 
     private func say(_ key: String, _ text: String, _ haptic: PhoneHaptic) {
-        if let out = gate.submit(Announcement(key: key, text: text), now: now) { post(out, haptic) }
+        if let out = announcer.say(Announcement(key: key, text: text), now: now) { post(out, haptic) }
     }
 
     private func post(_ announcement: Announcement, _ haptic: PhoneHaptic) {
