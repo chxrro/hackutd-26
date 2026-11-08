@@ -18,6 +18,8 @@ haptic_hub/
     geometry.py        sectors, percentiles, risk curves (pure numpy)
     ttc.py             time-to-collision from box growth (pure numpy)
     sweep.py           fake obstacle for bench tests
+    classify.py        person vs. object label per tracked box (--classifier)
+    nim.py             the same labels from a Nemotron vision model (cloud)
   haptics.py         risk -> motor levels (instant rise, slow fade, deadband)
   safety.py          when to send the fault pattern instead of levels
   belt/              where commands go
@@ -75,6 +77,85 @@ While the feed is down the belt plays the fault pattern. Files play at their
 own frame rate and loop. With `--belt sim` the terminal shows the belt, e.g.
 `belt LEVELS [ ▃█▃ ]`.
 
+## People vs. objects
+
+Every tracked box gets a **person** or **object** label. The `--show` window
+draws people in magenta (`PERSON #3 (local)`) and objects in orange
+(`object:chair #5 (local)`). The labels do not change the belt output yet.
+
+- `--classifier local` (default): the detector's own COCO class. YOLO's
+  `person` class means person and every other class means object. This adds
+  no model and no measurable time.
+- `--classifier nim`: a Nemotron vision model labels the same boxes. YOLO stays
+  the fast path for collision risk. In the background, at most `max_hz` (2/s)
+  and one request at a time, the hub draws numbered boxes on a 512 px copy of
+  the frame and asks the model which are people. The answer is cached per track
+  ID. A box without a cloud answer yet keeps its local label, marked `(local)`.
+  If boxes wait longer than `stale_s` (3 s) for an answer (timeout, no network,
+  HTTP 429, an unreadable reply), the hub reports `perception failing:
+  ClassifierUnavailable` and the belt plays the **fault pattern**. The window
+  freezes on its last frame while that lasts.
+
+Objects the detector doesn't know (walls, poles, curbs) produce no box, so they
+get no label. They are only covered by the depth risk.
+
+### Cloud endpoint
+
+Any OpenAI-compatible `/v1/chat/completions` server that accepts `image_url`
+works. Settings come from flags or the environment:
+
+| Setting | Flag | Env | Default |
+|---|---|---|---|
+| base URL | `--nim-url` | `NIM_BASE_URL` | `https://integrate.api.nvidia.com/v1` (hosted) |
+| model | `--nim-model` | `NIM_MODEL` | hosted: `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`; own server: the first model it lists |
+| key | - | `NIM_API_KEY`, else `NVIDIA_API_KEY` | none; required for the hosted API |
+
+`--nim-env FILE` loads `KEY=VALUE` lines first. Keep that file outside the repo.
+
+```bash
+# Self-hosted (e.g. vLLM on a Brev GPU, see below), endpoint in a private env file
+uv run haptic-hub run --source webcam --belt sim --show \
+    --classifier nim --nim-env ~/.config/haptic-hub/nim.env
+
+# NVIDIA's hosted API (build.nvidia.com)
+export NVIDIA_API_KEY=nvapi-...      # never commit it
+uv run haptic-hub run --source webcam --belt sim --show --classifier nim
+
+# Measure round trips to the endpoint with a real photo (runs the detector once)
+uv run haptic-hub nim-bench --image photo.jpg -n 20 --nim-env ~/.config/haptic-hub/nim.env
+```
+
+At startup the hub calls `GET /models`. A wrong URL, a missing hosted key, or a
+model the server doesn't list stops it with a clear message.
+
+### Serving Nemotron on Brev
+
+Following the [model card](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning)'s
+vLLM instructions. vLLM 0.20.0 is required. Use one GPU: FP8 weights on an
+L40S or H100, BF16 on an A100 80GB, NVFP4 on Blackwell.
+
+```bash
+docker run -d --restart unless-stopped --gpus all --ipc=host -p 8000:8000 \
+  vllm/vllm-openai:v0.20.0 \
+  nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-FP8 \
+  --served-model-name nemotron-3-nano-omni --trust-remote-code \
+  --max-model-len 16384 --max-num-seqs 8 --gpu-memory-utilization 0.85 \
+  --limit-mm-per-prompt '{"image": 1, "video": 0, "audio": 0}' \
+  --reasoning-parser nemotron_v3 --kv-cache-dtype fp8 --api-key "$VLLM_API_KEY"
+```
+
+We ran this on 1× L40S (Crusoe) with the `v0.20.0-cu129` tag. Brev's HTTPS
+share link sits behind a browser login, so reach the server through the Brev
+CLI tunnel instead and keep it running:
+`brev port-forward <instance> -p 8000:8000`, then
+`NIM_BASE_URL=http://localhost:8000/v1`. Put
+`NIM_BASE_URL`, `NIM_API_KEY` and `NIM_MODEL=nemotron-3-nano-omni` in
+`~/.config/haptic-hub/nim.env` (`chmod 600`). Requests turn thinking off
+(`chat_template_kwargs.enable_thinking=false`). Otherwise the model writes a
+long chain of thought before every answer. Stop the instance (`brev stop <instance>`)
+when you're done. It bills while it runs, and storage still bills until you
+delete it.
+
 ## How the risk is computed
 
 1. **Depth** (static obstacles): Depth Anything V2 *metric* estimates meters
@@ -101,3 +182,6 @@ validated yet; measure against a tape measure and tune.
 - Low obstacles, curbs and drop-offs are mostly outside the depth band.
 - Webcam/video results are not glasses results; the status says which source
   is active.
+- Person/object labels have not been checked for accuracy on our own footage,
+  local or cloud. Cloud labels arrive a round trip late, so a new box shows its
+  local label first.

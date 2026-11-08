@@ -27,11 +27,13 @@ class DebugView:
 
         infer_w, _ = result.debug.get("infer_size", (w, h))
         box_scale = w / infer_w
-        for box in result.debug.get("boxes", []):
+        for box, text, color in _box_labels(result.debug):
             p1 = (int(box.x1 * box_scale), int(box.y1 * box_scale))
             p2 = (int(box.x2 * box_scale), int(box.y2 * box_scale))
-            cv2.rectangle(img, p1, p2, (0, 200, 255), 2)
-            cv2.putText(img, f"{box.label} #{box.track_id}", (p1[0], p1[1] - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255), 1)
+            cv2.rectangle(img, p1, p2, color, 2)
+            cv2.putText(img, text, (p1[0], p1[1] - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+        if (classifier := _classifier_line(result.debug)) is not None:
+            cv2.putText(img, classifier, (6, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
 
         for x0, _ in sector_edges(w, n)[1:]:
             cv2.line(img, (x0, 0), (x0, h), (255, 255, 255), 1)
@@ -57,3 +59,37 @@ class DebugView:
 
     def close(self) -> None:
         cv2.destroyWindow(WINDOW)
+
+
+PERSON_COLOR = (255, 0, 255)  # magenta
+OBJECT_COLOR = (0, 200, 255)  # orange
+
+
+def _box_labels(debug: dict):
+    """(box, text, BGR color) per detection. With a classifier (perception/classify.py)
+    each box says PERSON or object, and where the label came from."""
+    classified = debug.get("classified")
+    if classified is None:
+        for box in debug.get("boxes", []):
+            yield box, f"{box.label} #{box.track_id}", OBJECT_COLOR
+        return
+    for c in classified:
+        box = c.box
+        name = "PERSON" if c.kind == "person" else f"object:{box.label}"
+        yield box, f"{name} #{box.track_id} ({c.origin})", PERSON_COLOR if c.kind == "person" else OBJECT_COLOR
+
+
+def _classifier_line(debug: dict) -> str | None:
+    status = debug.get("classifier")
+    if not status:
+        return None
+    if status.get("backend") != "nim":
+        return "classifier: local (detector class)"
+    parts = ["classifier: nim"]
+    if status.get("rtt_ms") is not None:
+        parts.append(f"rtt {status['rtt_ms']:.0f} ms")
+    if status.get("last_ok_age_s") is not None:
+        parts.append(f"last reply {status['last_ok_age_s']:.1f} s ago")
+    if status.get("error"):
+        parts.append(f"ERR {status['error'][:40]}")
+    return "  ".join(parts)

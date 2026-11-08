@@ -27,6 +27,29 @@ class PerceptionConfig:
 
 
 @dataclass
+class ClassifierConfig:
+    """Person vs. object labels for the tracked boxes (see perception/classify.py).
+
+    "local" reuses the detector's COCO class. "nim" asks a Nemotron vision model
+    behind any OpenAI-compatible endpoint (vLLM/NIM on Brev, or build.nvidia.com),
+    in the background and at a capped rate; YOLO stays the fast path.
+    """
+
+    backend: str = "local"  # "local" | "nim"
+    # OpenAI-compatible base URL, e.g. http://localhost:8000/v1 for a forwarded Brev port.
+    # "" -> env NIM_BASE_URL, else NVIDIA's hosted API.
+    base_url: str = ""
+    model: str = ""  # "" -> env NIM_MODEL, else the hosted default / the server's first listed model
+    max_hz: float = 2.0  # cloud requests per second at most (one in flight at a time)
+    timeout_s: float = 2.5  # per HTTP request
+    stale_s: float = 3.0  # boxes waiting this long without a cloud reply -> fault
+    image_width: int = 512  # frame is downscaled to this width before upload
+    jpeg_quality: int = 70
+    max_boxes: int = 8  # largest boxes sent per request; the rest keep local labels
+    label_ttl_s: float = 10.0  # forget a track's cloud label after this long unseen
+
+
+@dataclass
 class HapticsConfig:
     send_hz: float = 15.0  # belt heartbeat rate; must be well above 1000/ttl_ms
     ttl_ms: int = 250  # belt stops/faults if it hears nothing for this long
@@ -45,6 +68,7 @@ class SafetyConfig:
 @dataclass
 class HubConfig:
     perception: PerceptionConfig = field(default_factory=PerceptionConfig)
+    classifier: ClassifierConfig = field(default_factory=ClassifierConfig)
     haptics: HapticsConfig = field(default_factory=HapticsConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     ws_host: str = "0.0.0.0"
