@@ -17,7 +17,7 @@ World (ray-cast, numpy) --> SimPhone --HB frames over WebSocket--> GlassesServer
 | Real (production code) | Simulated |
 |---|---|
 | WebSocket server and `HB` frame decoding, `Hub` loops, `VisionPerception` fusion (depth bands, percentiles, box-growth TTC), `ClassifiedPerception`, `HapticPolicy`, `SafetyMonitor`, belt wire encoding | camera images (simple flat-shaded renders) |
-| belt firmware decoding plus TTL/fault state machine (`esp32/lib/belt_core`, compiled with the host C++ compiler through `belt_capi.cpp`); the hub's `BleBelt` writer, acknowledgement window and reconnects | the phone app, Wi-Fi, BLE radio (`SimRadioClient`), PWM/motors, the boot self-test |
+| belt firmware decoding plus TTL/fault state machine and status reports with their notify trigger (`esp32/lib/belt_core`, compiled with the host C++ compiler through `belt_capi.cpp`); the hub's `BleBelt` writer, acknowledgement window, status subscription and reconnects | the phone app, Wi-Fi, BLE radio (`SimRadioClient`), PWM/motors, the boot self-test |
 | | the models, when `--perception oracle` (default): ground-truth depth and boxes replace Depth Anything and YOLO |
 
 ## Run
@@ -71,7 +71,11 @@ The belt side runs the hub's real `BleBelt` (write-with-response, acknowledgemen
 window, reconnects) over `SimRadioClient`, a fake bleak client that feeds the
 firmware logic. Writes are acknowledged after 20 ms, a connect takes 50 ms, and
 reconnects are retried after 0.2–0.4 s (the real hub waits 1 s, then doubles).
-These are assumptions, not radio measurements.
+Status notifications are the bytes `belt_core` encodes, sent when its notify
+trigger fires (every mode change, every 250 ms), and reach the hub 10 ms later.
+The emulated belt reports build id `0` / info `sim`, since it's a host build.
+`EmulatedBelt(status_characteristic=False)` emulates firmware from before the
+status characteristic. These are assumptions, not radio measurements.
 
 | Scenario | Covers |
 |---|---|
@@ -85,6 +89,7 @@ These are assumptions, not radio measurements.
 | `user_stop`, `phone_vanishes`, `user_stop_unpaired` | the wearer's Stop (paired `end_session`): the session-ended cue (three pulses on motors 1+3), then quiet with status `stopped by wearer`, also while the phone's Wi-Fi drops; Start brings alerts back. A phone that vanishes without `end_session`, or an unpaired one that sends it, gets the fault pattern for as long as the hub runs |
 | `perception_crash`, `perception_stall` | model exceptions and hangs: fault, then recovery |
 | `belt_writes_lost`, `belt_disconnect` | the hub link goes quiet: the **firmware** TTL/link-lost logic plays the fault pattern, the phone is told `belt not acknowledging` / `belt disconnected` within one TTL + one status period, and the hub reconnects |
+| `belt_not_applying` | writes are acknowledged but the firmware never applies them (event queue full / loop stalled): the write-ack check can't see it; the firmware's TTL plays the fault pattern and its **status notification** makes the phone hear `belt TTL expired` within one TTL + one status period, with no reconnect. Fails with the status characteristic switched off |
 | `garbage_frames`, `network_latency` | malformed packets and broken JPEGs are rejected without a fault; 200 ±100 ms latency |
 
 Each check was confirmed to fail on a deliberately broken hub:

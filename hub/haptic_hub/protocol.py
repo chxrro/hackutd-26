@@ -105,3 +105,78 @@ def decode_belt_command(data: bytes) -> tuple[BeltCommand, int]:
     if len(data) != _BELT_HEADER.size + count:
         raise ProtocolError("belt command length mismatch")
     return BeltCommand(BeltMode(mode), tuple(data[_BELT_HEADER.size :]), ttl_ms), seq
+
+
+# ---------------------------------------------------------------- belt -> hub
+
+BELT_STATUS_UUID = "ba2928d9-3014-49de-8949-bd9933b65d7a"
+BELT_STATUS_VERSION = 1
+_BELT_STATUS_HEADER = struct.Struct("<BBBHIIBB")  # 15 bytes, then `count` levels
+BELT_STATUS_NO_COMMAND_AGE = 0xFFFF
+BELT_INFO_MAX_BUILD = 16
+
+
+class BeltFirmwareMode(IntEnum):
+    """What the belt reports it is doing (docs/protocol.md section 3, "Status")."""
+
+    IDLE = 0  # no command since boot: silent
+    OFF = 1
+    LEVELS = 2
+    FAULT = 3  # following a hub fault command
+    EXPIRED = 4  # command TTL lapsed: fault pattern
+    DISCONNECTED = 5  # BLE dropped while active: fault pattern
+    DORMANT = 6  # fault pattern finished: silent
+
+
+@dataclass(frozen=True)
+class BeltStatus:
+    mode: BeltFirmwareMode
+    seq: int  # seq of the last command the firmware applied
+    command_age_ms: int  # since that command was applied; BELT_STATUS_NO_COMMAND_AGE = none / saturated
+    uptime_ms: int
+    build_id: int  # first 8 hex digits of the firmware commit, 0 = unknown
+    max_duty: int
+    levels: tuple[int, ...]
+
+    @property
+    def build_hex(self) -> str | None:
+        return f"{self.build_id:08x}" if self.build_id else None
+
+
+def encode_belt_status(st: BeltStatus) -> bytes:
+    """What the firmware sends. Used by tests and the golden vector."""
+    header = _BELT_STATUS_HEADER.pack(
+        BELT_STATUS_VERSION, int(st.mode), st.seq & 0xFF, st.command_age_ms, st.uptime_ms & 0xFFFFFFFF,
+        st.build_id, st.max_duty, len(st.levels),
+    )  # fmt: skip
+    return header + bytes(st.levels)
+
+
+def decode_belt_status(data: bytes) -> BeltStatus:
+    if len(data) < _BELT_STATUS_HEADER.size:
+        raise ProtocolError(f"belt status too short ({len(data)} bytes)")
+    version, mode, seq, age, uptime, build, max_duty, count = _BELT_STATUS_HEADER.unpack_from(data)
+    if version != BELT_STATUS_VERSION:
+        raise ProtocolError(f"unsupported belt status version {version}")
+    if len(data) != _BELT_STATUS_HEADER.size + count:
+        raise ProtocolError(f"belt status length mismatch ({len(data)} bytes, {count} levels)")
+    try:
+        fw_mode = BeltFirmwareMode(mode)
+    except ValueError:
+        raise ProtocolError(f"unknown belt status mode {mode}") from None
+    return BeltStatus(fw_mode, seq, age, uptime, build, max_duty, tuple(data[_BELT_STATUS_HEADER.size :]))
+
+
+@dataclass(frozen=True)
+class BeltInfo:
+    version: int
+    motors: int
+    build: str | None  # firmware build id text; None for firmware older than 2026-11-08
+
+
+def decode_belt_info(data: bytes) -> BeltInfo:
+    """[protocol_version, motor_count, build id ASCII (optional, <= 16 bytes)]."""
+    if len(data) < 2:
+        raise ProtocolError(f"belt info is {len(data)} bytes, expected [protocol_version, motor_count]")
+    text = bytes(data[2 : 2 + BELT_INFO_MAX_BUILD]).decode("ascii", "replace").strip("\x00 ")
+    return BeltInfo(data[0], data[1], text or None)

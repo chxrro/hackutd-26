@@ -20,18 +20,25 @@ void HapticController::onCommand(const Command& cmd, uint32_t nowMs) {
   if (cmd.mode == Mode::Fault && !wasFault) faultSinceMs_ = nowMs;
 
   current_ = cmd;
+  hasCommand_ = true;
+  lostByDisconnect_ = false;
   commandAtMs_ = nowMs;
   ttlMs_ = clampTtl(cmd.ttlMs, timing_);
   state_ = State::Active;
 }
 
 void HapticController::onLinkLost(uint32_t nowMs) {
-  if (state_ == State::Active) enterLinkLost(nowMs);
+  if (state_ == State::Active) {
+    enterLinkLost(nowMs);
+    lostByDisconnect_ = true;
+  }
 }
 
 void HapticController::reset() {
   state_ = State::Idle;
   current_ = Command();
+  hasCommand_ = false;
+  lostByDisconnect_ = false;
 }
 
 void HapticController::enterLinkLost(uint32_t nowMs) {
@@ -69,6 +76,7 @@ void HapticController::update(uint32_t nowMs, uint8_t* outLevels) {
       } else if (current_.mode == Mode::Levels) {
         for (uint8_t i = 0; i < motorCount_; ++i) {
           outLevels[i] = i < current_.count ? current_.levels[i] : 0;
+          lastLevels_[i] = outLevels[i];
         }
         return;
       }
@@ -77,7 +85,7 @@ void HapticController::update(uint32_t nowMs, uint8_t* outLevels) {
 
   const uint8_t level =
       fault && faultPatternOn(static_cast<uint32_t>(nowMs - faultSinceMs_)) ? timing_.faultLevel : 0;
-  for (uint8_t i = 0; i < motorCount_; ++i) outLevels[i] = level;
+  for (uint8_t i = 0; i < motorCount_; ++i) outLevels[i] = lastLevels_[i] = level;
 }
 
 const char* toString(HapticController::State state) {

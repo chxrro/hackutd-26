@@ -4,12 +4,22 @@
 
 #include <Arduino.h>
 #include <belt_protocol.h>
+#include <belt_status.h>
 #include <console.h>
 #include <haptic_controller.h>
 
 #include "ble_link.h"
 #include "config.h"
 #include "motors.h"
+
+// Generated at build time by scripts/build_id.py (git commit of the firmware).
+#if __has_include(<belt_build_id.h>)
+#include <belt_build_id.h>
+#endif
+#ifndef BELT_BUILD_ID
+#define BELT_BUILD_ID 0u
+#define BELT_BUILD_STR "unknown"
+#endif
 
 namespace {
 
@@ -18,6 +28,8 @@ BleLink bleLink;
 belt::HapticController controller(cfg::kMotorCount);
 
 belt::HapticController::State lastState = belt::HapticController::State::Idle;
+belt::StatusMode lastMode = belt::StatusMode::Idle;
+belt::StatusNotifier statusNotifier;
 bool hubConnected = false;
 
 // Serial bench-test console (see lib/belt_core/src/console.h).
@@ -39,8 +51,10 @@ void runConsoleLine(const char* line, uint32_t nowMs) {
       Serial.print(belt::kConsoleHelp);
       return;
     case belt::ConsoleAction::Status:
-      Serial.printf("state=%s hub=%s motors=%u\n", belt::toString(controller.state()),
-                    hubConnected ? "connected" : "not connected", cfg::kMotorCount);
+      Serial.printf("state=%s mode=%s hub=%s motors=%u max_duty=%u build=%s\n",
+                    belt::toString(controller.state()), belt::toString(belt::statusMode(controller)),
+                    hubConnected ? "connected" : "not connected", cfg::kMotorCount, cfg::kMaxDuty,
+                    BELT_BUILD_STR);
       return;
     case belt::ConsoleAction::SelfTest:
     case belt::ConsoleAction::Hold:
@@ -109,10 +123,12 @@ void handleEvent(const BleLink::Event& ev, uint32_t nowMs) {
 void setup() {
   Serial.begin(115200);
   motors.begin();
+  Serial.printf("[belt] build %s, %u motors, max duty %u\n", BELT_BUILD_STR, cfg::kMotorCount,
+                cfg::kMaxDuty);
   Serial.printf("[belt] %u motors, self-test\n", cfg::kMotorCount);
   motors.selfTest(cfg::kSelfTestPulseMs, cfg::kSelfTestLevel);
 
-  if (!bleLink.begin(cfg::kMotorCount)) {
+  if (!bleLink.begin(cfg::kMotorCount, BELT_BUILD_STR)) {
     Serial.println("[ble] failed to start; motors stay off");
     return;
   }
@@ -134,6 +150,19 @@ void loop() {
   if (controller.state() != lastState) {
     lastState = controller.state();
     Serial.printf("[belt] state -> %s\n", belt::toString(lastState));
+  }
+
+  // Status characteristic: notify on every mode change and every kStatusPeriodMs.
+  const belt::Status status = belt::makeStatus(controller, now, BELT_BUILD_ID, cfg::kMaxDuty);
+  if (status.mode != lastMode) {
+    lastMode = status.mode;
+    // `state` alone can't show a hub fault command (it stays "active"), so log the mode too.
+    Serial.printf("[belt] mode -> %s (seq %u)\n", belt::toString(lastMode), status.seq);
+  }
+  if (statusNotifier.shouldNotify(status.mode, now)) {
+    uint8_t payload[belt::kStatusMaxSize];
+    const size_t length = belt::encodeStatus(status, payload, sizeof(payload));
+    if (length > 0) bleLink.publishStatus(payload, length);
   }
 
   delay(5);

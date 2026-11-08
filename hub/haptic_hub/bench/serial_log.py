@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 
 _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^\[belt\] state -> (\S+)"), "state"),
+    (re.compile(r"^\[belt\] mode -> (\S+)"), "mode"),  # firmware from 2026-11-08 on
     (re.compile(r"^\[ble\] hub connected"), "connected"),
     (re.compile(r"^\[ble\] hub disconnected"), "disconnected"),
     (re.compile(r"^\[ble\] rejected command \((.+)\)"), "rejected"),

@@ -562,3 +562,93 @@ def test_sim_falls_back_to_the_python_model_without_a_compiler(monkeypatch):
     monkeypatch.setattr(firmware, "BeltFirmware", unavailable)
     link, warning = links.make_sim_link(5)
     assert isinstance(link, SimBenchLink) and "Python TTL model" in warning
+
+
+# ---------------------------------------------------------------- belt status characteristic (2026-11-08)
+
+
+def test_parse_serial_mode_line():
+    ev = parse_serial_line("[belt] mode -> fault (seq 12)", 1.0)
+    assert (ev.kind, ev.value) == ("mode", "fault")
+
+
+def test_belt_core_status_times_ttl_and_sees_the_fault_command():
+    """FirmwareSimLink reports belt_core's own status payloads, so TTL expiry and
+    the fault command are machine-checked; the feel stays with the operator."""
+    link = _firmware_link()
+    report = run(link, ScriptedOperator(), fast())
+    checks = by_name(report)
+    assert all(c["status"] == "pass" for c in checks.values()), render_summary(report)
+    assert checks["connect"]["data"]["status"] is True and checks["connect"]["data"]["build"] == "sim"
+    for r in checks["ttl"]["data"]["runs"]:
+        assert r["effective_ttl_ms"] - 5 <= r["status_expired_ms"] <= r["effective_ttl_ms"] + 60, r
+    fault = checks["fault-command"]
+    assert fault["data"]["status_fault_ms"] <= 60 and "operator" in fault["observed_by"]
+    assert checks["reconnect"]["data"]["status_mode_on_reconnect"] == "disconnected"
+
+
+def test_fault_command_with_status_stays_unconfirmed_under_yes():
+    report = run(_firmware_link(), AutoOperator(echo=None), fast(only=frozenset({"fault-command"})))
+    assert by_name(report)["fault-command"]["status"] == "unconfirmed"
+
+
+def test_fault_command_fails_when_the_belt_status_never_says_fault():
+    link = _firmware_link()
+    real = link._status.on_payload
+
+    def no_fault(data):  # a firmware that keeps reporting "off" while playing whatever it plays
+        real(bytes([data[0], 1]) + bytes(data[2:]))
+
+    link._status.on_payload = no_fault
+    report = run(link, ScriptedOperator(), fast(only=frozenset({"fault-command", "ttl"})))
+    checks = by_name(report)
+    assert checks["fault-command"]["status"] == "fail" and "never reported mode fault" in checks["fault-command"]["summary"]
+    assert checks["ttl"]["status"] == "fail", "status never said expired, although the serial log did"
+
+
+def test_ble_link_subscribes_to_status_and_reads_the_build(fake_ble):
+    from haptic_hub.protocol import BELT_STATUS_UUID, BeltFirmwareMode, BeltStatus, encode_belt_status
+
+    def st(mode, seq):
+        return encode_belt_status(BeltStatus(mode, seq, 10, 1000, 0x3268A632, 190, (0,) * 5))
+
+    class Char:
+        properties = ["read", "notify"]
+
+    class Services:
+        def get_characteristic(self, uuid):
+            return Char() if uuid == BELT_STATUS_UUID else None
+
+    class StatusClient(fake_ble):
+        info = b"\x01\x05" + b"3268a632"
+        services = Services()
+        callback = None
+
+        async def start_notify(self, uuid, callback):
+            StatusClient.callback = callback
+
+        async def read_gatt_char(self, uuid):
+            if uuid == BELT_STATUS_UUID:
+                return st(BeltFirmwareMode.IDLE, 0)
+            return await super().read_gatt_char(uuid)
+
+    links.BleakClient = StatusClient  # the fixture restores it
+
+    async def go():
+        link = links.BleBenchLink(5)
+        info = await link.connect(1.0)
+        StatusClient.callback(None, bytearray(st(BeltFirmwareMode.LEVELS, 1)))
+        StatusClient.callback(None, bytearray(st(BeltFirmwareMode.LEVELS, 2)))  # same mode: no new event
+        StatusClient.callback(None, bytearray(b"\x01\x02"))  # malformed: ignored
+        StatusClient.callback(None, bytearray(st(BeltFirmwareMode.EXPIRED, 2)))
+        return link, info
+
+    link, info = asyncio.run(go())
+    assert info.build == "3268a632" and info.status is True
+    assert [e.value for e in link.status_log.events] == ["idle", "levels", "expired"]
+    assert link._status.malformed == 1 and "max duty 190" in link.status_log.events[-1].line
+
+
+def test_ble_link_without_status_is_older_firmware(fake_ble):
+    info = asyncio.run(links.BleBenchLink(5).connect(1.0))
+    assert info.status is False and info.build is None
