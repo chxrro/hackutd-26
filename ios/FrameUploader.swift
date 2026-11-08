@@ -22,14 +22,11 @@ struct FrameUploader: Sendable {
         guard var url = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines)),
               url.scheme == "http", url.user == nil, url.password == nil,
               url.path.isEmpty || url.path == "/", url.query == nil, url.fragment == nil,
-              let host = url.host?.lowercased(), Self.isLocal(host),
+              let host = url.host?.lowercased(), LocalNetwork.isLocalHost(host),
               let port = url.port, (1...65535).contains(port) else {
             throw UploadError.invalidAddress
         }
-        let code = code.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard code.utf8.count == 16, code.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
-            throw UploadError.invalidCode
-        }
+        guard let code = LocalNetwork.normalizedCode(code) else { throw UploadError.invalidCode }
         url.path = "/frame"
         guard let endpoint = url.url else { throw UploadError.invalidAddress }
         self.endpoint = endpoint
@@ -47,15 +44,6 @@ struct FrameUploader: Sendable {
         let (_, response) = try await Self.session.upload(for: request, from: jpeg)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 204 else { throw UploadError.receiver(status) }
-    }
-
-    private static func isLocal(_ host: String) -> Bool {
-        if host.hasSuffix(".local") { return true }
-        let octets = host.split(separator: ".", omittingEmptySubsequences: false).compactMap { UInt8($0) }
-        guard octets.count == 4, octets.map({ String($0) }).joined(separator: ".") == host else { return false }
-        return octets[0] == 10 || octets[0] == 127 ||
-            (octets[0] == 172 && (16...31).contains(octets[1])) ||
-            (octets[0] == 192 && octets[1] == 168)
     }
 }
 

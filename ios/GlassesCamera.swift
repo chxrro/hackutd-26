@@ -12,7 +12,8 @@ final class GlassesCamera {
     private var observation: Task<Void, Never>?
     private var sessionID = UUID()
 
-    private func configure() throws {
+    /// Configures the Meta SDK once. Also called before enabling mock glasses (Debug).
+    func configure() throws {
         guard !configured else { return }
         try Wearables.configure()
         configured = true
@@ -49,6 +50,25 @@ final class GlassesCamera {
         return permission == .granted ? "Glasses camera access granted." : "Glasses camera access denied."
     }
 
+    struct SetupStatus: Equatable {
+        var registered: Bool
+        /// nil when it couldn't be checked (for example before registration).
+        var cameraGranted: Bool?
+        var deviceConnected: Bool
+    }
+
+    /// Reads the setup state without starting registration or prompting.
+    func setupStatus() async throws -> SetupStatus {
+        try configure()
+        let wearables = Wearables.shared
+        let registered = wearables.registrationState == .registered
+        var camera: Bool?
+        if registered, let permission = try? await wearables.checkPermissionStatus(.camera) {
+            camera = permission == .granted
+        }
+        return SetupStatus(registered: registered, cameraGranted: camera, deviceConnected: selector?.activeDevice != nil)
+    }
+
     func openGlassesAppUpdate() async throws -> String {
         try configure()
         try await Wearables.shared.openDATGlassesAppUpdate()
@@ -77,7 +97,8 @@ final class GlassesCamera {
         session.errorPublisher.listen { [weak self] error in
             Task { @MainActor in
                 guard self?.sessionID == id else { return }
-                onFailure(error.localizedDescription)
+                onFailure(error == .datAppOnTheGlassesUpdateRequired
+                    ? Self.updateRequiredMessage : error.localizedDescription)
             }
         }.store(in: listeners)
 
@@ -125,6 +146,11 @@ final class GlassesCamera {
         }
         try session.start()
     }
+
+    /// The SDK's DeviceSessionError.datAppOnTheGlassesUpdateRequired, seen on
+    /// Ray-Ban Meta Gen 2 on 2026-11-07.
+    static let updateRequiredMessage =
+        "The app on the glasses needs an update. Open glasses app update in Setup and finish it in Meta AI while wearing the glasses."
 
     func stop() {
         sessionID = UUID()

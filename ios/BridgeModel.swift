@@ -6,6 +6,12 @@ final class BridgeModel: ObservableObject {
     enum Destination {
         case screen
         case viewer(address: String, code: String)
+        /// The haptic hub over WebSocket (docs/protocol.md section 1). Frames go to `onFrame`.
+        case hub
+    }
+
+    enum DestinationKind: Equatable {
+        case screen, viewer, hub
     }
 
     @Published private(set) var isSending = false
@@ -13,8 +19,27 @@ final class BridgeModel: ObservableObject {
     @Published private(set) var sourceStatus = "Idle."
     @Published private(set) var viewerStatus = ""
     @Published private(set) var previewImage: UIImage?
+    @Published private(set) var activeDestination: DestinationKind?
+    @Published private(set) var activeSource: FrameSource?
+    /// Why the source stopped by itself (nil after a user stop or a new start).
+    @Published private(set) var failure: String?
+    /// Where the failed run was sending, so the wearer screen only reports hub runs.
+    @Published private(set) var failedDestination: DestinationKind?
+    @Published private(set) var glassesSetup: GlassesCamera.SetupStatus?
+    /// Set when the glasses report that their app needs an update.
+    @Published private(set) var glassesNeedUpdate = false
 
-    var showsLocalPreview: Bool { isSending && uploader == nil }
+    var showsLocalPreview: Bool { isSending && activeDestination == .screen }
+
+    /// Receives every frame while the destination is `.hub`.
+    var onFrame: ((UIImage) -> Void)?
+    /// Receives the stream state for `phone_status` while the destination is `.hub`.
+    var onStreamState: ((String) -> Void)?
+
+    /// When the last frame arrived from the source, nil before the first.
+    var lastFrame: ContinuousClock.Instant? { lastFrameAt }
+    /// Frames received from the source since launch, for diagnostics.
+    private(set) var framesReceived = 0
 
     private var sourceTask: Task<Void, Never>?
     private var upload: Task<Void, Never>?
@@ -23,7 +48,33 @@ final class BridgeModel: ObservableObject {
     private var lastFrameAt: ContinuousClock.Instant?
     private var runID = UUID()
 
+    private var lastPreviewAt: ContinuousClock.Instant?
+
     private let glasses = GlassesCamera()
+
+    #if DEBUG
+    /// Debug-only stand-in glasses (Meta MockDeviceKit). See MockGlasses.swift.
+    let mockGlasses = MockGlasses()
+
+    /// Debug test fault: keep capturing but stop forwarding frames to the hub,
+    /// so the hub reports "no camera frames" while the phone still has them.
+    @Published var holdFramesToHub = false
+
+    func setMockGlasses(_ on: Bool) {
+        guard !isSending else { return }
+        mockGlasses.setOn(on) { try self.glasses.configure() }
+        refreshGlassesSetup()
+    }
+    #endif
+
+    /// True when glasses frames come from Debug mock glasses, not the Ray-Bans.
+    var usingMockGlasses: Bool {
+        #if DEBUG
+        return mockGlasses.isOn
+        #else
+        return false
+        #endif
+    }
 
     func register() {
         setup { try await self.glasses.register() }
@@ -34,7 +85,23 @@ final class BridgeModel: ObservableObject {
     }
 
     func openGlassesAppUpdate() {
-        setup { try await self.glasses.openGlassesAppUpdate() }
+        setup {
+            let message = try await self.glasses.openGlassesAppUpdate()
+            self.glassesNeedUpdate = false
+            return message
+        }
+    }
+
+    /// Reads registration, camera permission and device state without prompting.
+    func refreshGlassesSetup() {
+        guard !isSettingUp else { return }
+        Task {
+            do {
+                glassesSetup = try await glasses.setupStatus()
+            } catch {
+                sourceStatus = error.localizedDescription
+            }
+        }
     }
 
     func handleCallback(_ url: URL) {
@@ -56,6 +123,7 @@ final class BridgeModel: ObservableObject {
             } catch {
                 sourceStatus = error.localizedDescription
             }
+            if let status = try? await glasses.setupStatus() { glassesSetup = status }
         }
     }
 
@@ -74,6 +142,18 @@ final class BridgeModel: ObservableObject {
         viewerStatus = "Viewer: waiting for the first frame."
         startedAt = .now
         lastFrameAt = nil
+        failure = nil
+        activeSource = source
+        switch destination {
+        case .screen: activeDestination = .screen
+        case .viewer: activeDestination = .viewer
+        case .hub: activeDestination = .hub
+        }
+        reportStream("starting")
+        // The hub path warns after 2 s without frames (WearerStatus) and keeps
+        // waiting a while for the glasses to recover; the viewer paths keep the
+        // original 2 s cut-off.
+        let staleLimit: Duration = activeDestination == .hub ? .seconds(10) : .seconds(2)
 
         switch source {
         case .test:
@@ -99,22 +179,22 @@ final class BridgeModel: ObservableObject {
                         },
                         onFailure: { [weak self] message in
                             guard let self, self.runID == id else { return }
-                            self.stop(message)
+                            self.fail(message)
                         }
                     )
                 } catch {
                     guard runID == id else { return }
-                    stop(error.localizedDescription)
+                    fail(error.localizedDescription)
                     return
                 }
                 while !Task.isCancelled {
                     let now = ContinuousClock.now
-                    if let lastFrameAt, lastFrameAt.duration(to: now) >= .seconds(2) {
-                        stop("Glasses feed stale. Check the connection and try again.")
+                    if let lastFrameAt, lastFrameAt.duration(to: now) >= staleLimit {
+                        fail("Glasses feed stale. Check the connection and try again.")
                         return
                     }
                     if lastFrameAt == nil, startedAt.duration(to: now) >= .seconds(12) {
-                        stop("No frames from the glasses. Check pairing and camera permission.")
+                        fail("No frames from the glasses. Check pairing and camera permission.")
                         return
                     }
                     try? await Task.sleep(for: .milliseconds(250))
@@ -124,6 +204,7 @@ final class BridgeModel: ObservableObject {
     }
 
     func stop(_ message: String = "Stopped.") {
+        let wasSending = isSending
         runID = UUID()
         sourceTask?.cancel()
         sourceTask = nil
@@ -134,10 +215,44 @@ final class BridgeModel: ObservableObject {
         glasses.stop()
         isSending = false
         sourceStatus = message
+        failure = nil
+        failedDestination = nil
+        if wasSending { reportStream("stopped") }
+        activeDestination = nil
+        activeSource = nil
+    }
+
+    /// The source stopped by itself (or was interrupted): keep the reason for the wearer screen.
+    func fail(_ message: String) {
+        let destination = activeDestination
+        stop(message)
+        failure = message
+        failedDestination = destination
+        if message == GlassesCamera.updateRequiredMessage { glassesNeedUpdate = true }
+    }
+
+    private func reportStream(_ state: String) {
+        if activeDestination == .hub { onStreamState?(state) }
     }
 
     private func offer(_ image: UIImage) {
+        if lastFrameAt == nil { reportStream("streaming") }
         lastFrameAt = .now
+        framesReceived += 1
+        if activeDestination == .hub {
+            #if DEBUG
+            if !holdFramesToHub { onFrame?(image) }
+            #else
+            onFrame?(image)
+            #endif
+            // The helper's live preview doesn't need every frame.
+            let now = ContinuousClock.now
+            if lastPreviewAt.map({ $0.duration(to: now) >= .milliseconds(200) }) ?? true {
+                lastPreviewAt = now
+                previewImage = image
+            }
+            return
+        }
         guard let uploader else {
             previewImage = image
             return
