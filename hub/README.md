@@ -313,6 +313,31 @@ uv run haptic-hub nim-bench --image photo.jpg -n 20 --nim-env ~/.config/haptic-h
 At startup the hub calls `GET /models`. A wrong URL, a missing hosted key, or a
 model the server doesn't list stops it with a clear message.
 
+### Serving Nemotron locally (Mac, llama.cpp)
+
+No cloud GPU needed. [llama.cpp](https://github.com/ggml-org/llama.cpp)'s
+`llama-server` is OpenAI-compatible and runs the same model as a GGUF from
+[Unsloth](https://huggingface.co/unsloth/NVIDIA-Nemotron-3-Nano-Omni-30B-A3B-Reasoning-GGUF)
+on Apple GPUs. The default 4-bit file (`MXFP4_MOE`) is 21.7 GB, plus the
+1.6 GB vision projector, and it sits in unified memory next to YOLO and depth,
+so expect to need a 32 GB+ Mac. Ollama can't do this model's vision yet.
+
+```bash
+brew install llama.cpp
+hub/scripts/serve-nemotron-local.sh --download   # once, into ~/models/nemotron-3-nano-omni
+hub/scripts/serve-nemotron-local.sh              # leave running (127.0.0.1:8080)
+```
+
+`~/.config/haptic-hub/nim.env`:
+
+```
+NIM_BASE_URL=http://localhost:8080/v1
+NIM_MODEL=nemotron-3-nano-omni
+```
+
+Then `uv run haptic-hub run ...` uses it by default. `NEMOTRON_QUANT`,
+`NEMOTRON_DIR` and `NEMOTRON_PORT` override the script's defaults.
+
 ### Serving Nemotron on Brev
 
 Following the [model card](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning)'s
