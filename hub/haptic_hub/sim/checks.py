@@ -276,8 +276,12 @@ def never_silent_when_unhealthy(settle_s: float = 0.15, start_s: float = 0.5) ->
             # only judge samples where the hub has been unhealthy for at least settle_s
             if any(o.reason is None for o in tl.hub if h.t - settle_s <= o.t <= h.t):
                 continue
-            near = tl.belt_between(h.t, h.t + 0.02)
-            if near and not near[0].signalling_fault:
+            # The hub sets its reason and sends the matching command in one event-loop
+            # step, so judge the belt samples on both sides of the moment `reason` was
+            # read: a real violation shows on both, a state change right at h.t on one.
+            before = tl.belt_between(h.t - 0.02, h.t)
+            after = tl.belt_between(h.t, h.t + 0.02)
+            if before and after and not before[-1].signalling_fault and not after[0].signalling_fault:
                 bad.append(round(h.t, 2))
         return CheckResult("invariant: unhealthy hub -> fault pattern, never silence", not bad,
                            f"violations at t={bad[:5]}" if bad else "held")  # fmt: skip

@@ -30,6 +30,7 @@ uv run python -m haptic_hub.sim --list
 uv run python -m haptic_hub.sim pole_left head_turn --show          # live window
 uv run python -m haptic_hub.sim --record sim-runs/ --json sim-runs/report.json
 uv run python -m haptic_hub.sim --perception vision                 # real models on renders (needs --extra vision)
+uv run python -m haptic_hub.sim --motion flow                       # + optical-flow motion, as `haptic-hub run --motion flow`
 uv run pytest tests/test_sim.py                 # unit tests + 4 fast scenarios
 HUB_SIM_ALL=1 uv run pytest tests/test_sim.py   # every gating scenario
 ```
@@ -42,6 +43,16 @@ Scenarios run in real time, because the hub's loops use `time.monotonic()` and
 asyncio sleeps. The `--perception vision|depth|detector` results are for
 information only. YOLO does not recognize the flat-shaded "person" cylinder,
 and these renders say nothing about accuracy on real glasses video.
+
+Perception is assembled the way `haptic-hub run` does it:
+- `build_perception` (or the oracle);
+- `FlowMotionPerception` when `--motion flow` is set;
+- `ClassifiedPerception` with the local backend (the sim never calls the cloud).
+
+Each report prints the chain it ran, e.g. `oracle+flow+local-classifier`. It
+also prints the hub's own stage timings (`haptic_hub.latency`) for the whole
+scenario. These are simulation timings on this laptop: the phone is in the same
+process, and "network" delay is whatever a scenario injects.
 
 ## What is checked
 

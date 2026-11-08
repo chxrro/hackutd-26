@@ -69,12 +69,18 @@ def _free_port() -> int:
 
 
 def make_perception(kind: str, cfg: HubConfig, truth: TruthStore, scenario: Scenario):
-    """Builds the same chain `haptic-hub run` does: perception, then the
-    person/object classifier wrapper (local backend; never the cloud in the sim)."""
+    """Builds the same chain `haptic-hub run` does: perception (plus optical-flow
+    motion when cfg.perception.motion == "flow"), then the person/object
+    classifier wrapper (local backend; the sim never calls the cloud)."""
     from haptic_hub.perception.classify import ClassifiedPerception
 
     if kind == "oracle":
         inner = OraclePerception(cfg.perception, truth, scenario.camera.width, scenario.noise)
+        if cfg.perception.motion == "flow":
+            from haptic_hub.perception.flow import FlowMotionPerception
+
+            p = cfg.perception
+            inner = FlowMotionPerception(inner, p.flow, p.sectors, p.ttc_near_s, p.ttc_far_s)
     else:
         from haptic_hub.perception import build_perception  # real models: needs `uv sync --extra vision`
 
@@ -82,12 +88,18 @@ def make_perception(kind: str, cfg: HubConfig, truth: TruthStore, scenario: Scen
     return inner if kind == "sweep" else ClassifiedPerception(inner)
 
 
+def _unwrap(perc: Any) -> list[Any]:
+    """perc and every perception it wraps (classifier, flow, ...), outermost first."""
+    chain = []
+    while perc is not None and perc not in chain:
+        chain.append(perc)
+        perc = getattr(perc, "inner", None)
+    return chain
+
+
 def _oracle(perc: Any) -> OraclePerception | None:
-    """The OraclePerception inside an optional classifier wrapper (for fault injection)."""
-    for candidate in (perc, getattr(perc, "inner", None), getattr(perc, "_inner", None)):
-        if isinstance(candidate, OraclePerception):
-            return candidate
-    return None
+    """The OraclePerception inside any wrappers (for fault injection)."""
+    return next((p for p in _unwrap(perc) if isinstance(p, OraclePerception)), None)
 
 
 def _reset_tracking(perc: Any) -> None:
@@ -96,6 +108,9 @@ def _reset_tracking(perc: Any) -> None:
 
     if hasattr(perc, "_ttc"):
         perc._ttc = TtcEstimator()
+    motion = getattr(perc, "motion", None)
+    if motion is not None and type(motion).__name__ == "FlowMotion":  # fresh optical-flow state per scenario
+        perc.motion = type(motion)(motion.cfg, motion.sectors, motion.ttc_near_s, motion.ttc_far_s)
     model = getattr(getattr(perc, "_tracker", None), "_model", None)
     if model is not None:
         model.predictor = None  # ultralytics rebuilds it (and ByteTrack) on the next call
@@ -106,8 +121,10 @@ async def run_scenario(
     perception: str | Any = "oracle",
     record: Path | None = None,
     show: bool = False,
+    motion: str = "off",
 ) -> Report:
     cfg = HubConfig()
+    cfg.perception.motion = motion
     if scenario.configure is not None:
         scenario.configure(cfg)
     world = scenario.build()
@@ -120,7 +137,8 @@ async def run_scenario(
         perc = await asyncio.to_thread(make_perception, kind, cfg, truth, scenario)
     else:  # an already-built perception (lets callers reuse loaded models across scenarios)
         perc, kind = perception, getattr(perception, "name", "custom")
-    _reset_tracking(getattr(perc, "inner", getattr(perc, "_inner", perc)))
+    for layer in _unwrap(perc):
+        _reset_tracking(layer)
     oracle = _oracle(perc)
 
     port = _free_port()
@@ -129,6 +147,7 @@ async def run_scenario(
     belt.samples = timeline.belt
     server = GlassesServer("127.0.0.1", port)
     hub = Hub(cfg, server, perc, belt, status_sink=server)
+    hub.latency_log_s = 1e9  # one latency window for the whole scenario (read at the end)
     lock = threading.Lock()
     latest: dict[str, Any] = {}
 
@@ -246,6 +265,10 @@ async def run_scenario(
     ages = [m.get("frame_age_ms") for _, m in timeline.statuses if m.get("healthy") and m.get("frame_age_ms") is not None]
     metrics = alert_metrics(timeline, danger_m=scenario.danger_m, quiet_m=scenario.quiet_m)
     metrics["inference_ms_median"] = round(sorted(infer)[len(infer) // 2], 1) if infer else None
+    # Hub-side stage timings from haptic_hub.latency (same process and clock as the sim phone,
+    # so capture->receive is meaningful here; on real hardware the phone clock differs).
+    stages = hub.latency.summarize(time.monotonic(), hub.slot.dropped).stages
+    metrics["latency_ms"] = {k: [None if x is None else round(x, 1) for x in v] for k, v in stages.items()}
     metrics["frame_age_ms_median"] = round(sorted(ages)[len(ages) // 2], 1) if ages else None
     checks = [check(timeline) for check in [*scenario.checks, *(make() for make in INVARIANTS)]]
-    return Report(scenario.name, kind, scenario.duration, checks, metrics, timeline.counters, timeline)
+    return Report(scenario.name, getattr(perc, "name", kind), scenario.duration, checks, metrics, timeline.counters, timeline)

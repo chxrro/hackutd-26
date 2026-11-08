@@ -6,6 +6,7 @@
   uv run python -m haptic_hub.sim pole_left head_turn --show
   uv run python -m haptic_hub.sim approach_wall --record sim-runs/
   uv run python -m haptic_hub.sim --perception vision   real models on synthetic renders (informational)
+  uv run python -m haptic_hub.sim --motion flow          add optical-flow motion (as `haptic-hub run --motion flow`)
 
 Exit status is 0 only if every gating scenario passes. Probes never fail the run.
 Every result is a SIMULATION: synthetic camera, emulated radio, no motors.
@@ -34,8 +35,10 @@ def _print_report(report, gating: bool) -> None:
         mark = "ok " if chk.passed else ("XX " if gating else "-- ")
         print(f"   {mark} {chk.name}: {chk.detail}")
     m, k = report.metrics, report.counters
+    lat = m.get("latency_ms") or {}
     print(f"       metrics: danger coverage {m.get('danger_coverage')}, quiet-zone buzzing {m.get('quiet_zone_buzzing')}, "
-          f"inference {m.get('inference_ms_median')} ms, frame age {m.get('frame_age_ms_median')} ms")  # fmt: skip
+          f"hub received->belt command median/p90 {lat.get('hub_total')} ms, "
+          f"phone capture->hub {lat.get('capture_recv')} ms")  # fmt: skip
     print(f"       counters: {k}")
 
 
@@ -69,7 +72,9 @@ async def _main(args: argparse.Namespace) -> int:
         from haptic_hub.sim.runner import make_perception
 
         print("loading models ...")
-        perception = await asyncio.to_thread(make_perception, args.perception, HubConfig(), TruthStore(), chosen[0])
+        cfg = HubConfig()
+        cfg.perception.motion = args.motion
+        perception = await asyncio.to_thread(make_perception, args.perception, cfg, TruthStore(), chosen[0])
         await asyncio.to_thread(_warm_up, perception, chosen[0])  # first inference is slow; keep it out of scenarios
 
     reports, started = [], time.monotonic()
@@ -78,7 +83,7 @@ async def _main(args: argparse.Namespace) -> int:
         if args.record:
             out = Path(args.record)
             record = out / f"{sc.name}.mp4" if out.suffix != ".mp4" or len(chosen) > 1 else out
-        report = await run_scenario(sc, perception, record=record, show=args.show)
+        report = await run_scenario(sc, perception, record=record, show=args.show, motion=args.motion)
         gating = "probe" not in sc.tags and args.perception == "oracle"
         _print_report(report, gating)
         reports.append((report, gating))
@@ -93,7 +98,7 @@ async def _main(args: argparse.Namespace) -> int:
           + (f"; findings (non-gating): {findings}" if findings else ""))  # fmt: skip
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        payload = {"simulation": True, "perception": args.perception, "results": [
+        payload = {"simulation": True, "perception": args.perception, "motion": args.motion, "results": [
             {**r.summary(), "gating": g} for r, g in reports]}  # fmt: skip
         Path(args.json).write_text(json.dumps(payload, indent=2, default=str))
         print(f"wrote {args.json}")
@@ -108,6 +113,8 @@ def main() -> None:
     parser.add_argument("--probes", action="store_true", help="also run the limitation probes (non-gating)")
     parser.add_argument("--perception", default="oracle", choices=["oracle", "vision", "depth", "detector"],
                         help="oracle = ground truth (default); others load the real models (informational)")
+    parser.add_argument("--motion", default="off", choices=["off", "flow"],
+                        help="optical-flow approach/crossing risk on tracked boxes (perception/flow.py)")
     parser.add_argument("--record", help="write an MP4 per scenario into this directory (or one .mp4 path)")
     parser.add_argument("--show", action="store_true", help="live window (q to stop drawing)")
     parser.add_argument("--json", help="write a JSON summary to this path")

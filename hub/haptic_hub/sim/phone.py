@@ -112,6 +112,7 @@ class SimPhone:
 
     async def _send_frame(self, conn: ClientConnection) -> None:
         t_capture, render = await asyncio.to_thread(self.capture)
+        capture_ms = int(time.time() * 1000)  # stamped before the network, like meta/'s forwarder
         self._seq = (self._seq + 1) & 0xFFFFFFFF
         seq = self._seq
         ok, jpeg = await asyncio.to_thread(
@@ -126,7 +127,7 @@ class SimPhone:
         if delay > 0:
             await asyncio.sleep(delay)  # one frame in flight, like meta/'s forwarder
         h, w = render.image.shape[:2]
-        packet = FramePacket(seq, int(time.time() * 1000), w, h, jpeg.tobytes())
+        packet = FramePacket(seq, capture_ms, w, h, jpeg.tobytes())
         await conn.send(encode_frame_packet(packet))
         self.sent.append(SentFrame(seq, t_capture, self._now()))
         if self.faults.garbage_every and seq % self.faults.garbage_every == 0:
