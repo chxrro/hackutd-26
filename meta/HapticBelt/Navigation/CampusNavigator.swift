@@ -40,9 +40,14 @@ final class CampusNavigator: NSObject {
   private(set) var lastPhrase = ""
   private(set) var deferringToHub = false
   private(set) var loadError: String?
+  /// Where speech is going right now, e.g. the glasses or "iPhone Speaker".
+  private(set) var audioRoute = "No audio output"
+  private(set) var audioOnBluetooth = false
 
   /// Supplied by the screen: is the hub alerting right now?
   @ObservationIgnored var hubAlerting: () -> Bool = { false }
+  /// Supplied by the screen: is a fresh, healthy hub status arriving?
+  @ObservationIgnored var obstacleAlertsRunning: () -> Bool = { false }
 
   @ObservationIgnored private let manager = CLLocationManager()
   @ObservationIgnored private let synth = AVSpeechSynthesizer()
@@ -53,6 +58,7 @@ final class CampusNavigator: NSObject {
   @ObservationIgnored private var latestLocation: CLLocation?
   @ObservationIgnored private var latestHeading: HeadingReading?
   @ObservationIgnored private var idleWasDisabled: Bool?
+  @ObservationIgnored private var routeObserver: NSObjectProtocol?
 
   static let tickSeconds = 0.25
 
@@ -66,6 +72,17 @@ final class CampusNavigator: NSObject {
     manager.headingFilter = 2
     manager.headingOrientation = .portrait
     loadRoutes()
+    synth.usesApplicationAudioSession = true
+    refreshAudioRoute()
+    routeObserver = NotificationCenter.default.addObserver(
+      forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
+    ) { [weak self] _ in
+      Task { @MainActor in self?.refreshAudioRoute() }
+    }
+  }
+
+  isolated deinit {
+    if let routeObserver { NotificationCenter.default.removeObserver(routeObserver) }
   }
 
   var route: Route? { routes.indices.contains(selectedRoute) ? routes[selectedRoute] : nil }
@@ -149,10 +166,12 @@ final class CampusNavigator: NSObject {
     // Keep the screen on while guiding; put back whatever the camera code had set.
     idleWasDisabled = UIApplication.shared.isIdleTimerDisabled
     UIApplication.shared.isIdleTimerDisabled = true
-    configureAudioIfUnset()
     // Even the opening line waits its turn behind a hub alert or fault.
     if !hubAlerting() {
-      say("Route guidance started to \(route.destination). Directions only; obstacles are not checked by directions.")
+      let alerts = obstacleAlertsRunning()
+        ? "Directions only; obstacles are not checked by directions."
+        : "Obstacle alerts are off. Directions only."
+      say("Route guidance started to \(route.destination). \(alerts)")
     }
     loop = Task { [weak self] in
       while !Task.isCancelled {
@@ -219,18 +238,33 @@ final class CampusNavigator: NSObject {
       UIAccessibility.post(notification: .announcement, argument: phrase)
       return
     }
+    prepareAudio()
     let u = AVSpeechUtterance(string: phrase)
+    u.voice = AVSpeechSynthesisVoice(language: "en-US")
     u.rate = AVSpeechUtteranceDefaultSpeechRate * 1.05
     synth.speak(u)
   }
 
-  /// Only if nobody else in the app set up audio: the default category obeys the mute
-  /// switch, which would silently drop route speech.
-  private func configureAudioIfUnset() {
+  /// Same session settings as the hazard-speech output that was heard through the
+  /// glasses (playback / spokenAudio / mixWithOthers), so the two never fight over the
+  /// route. Re-activating before each phrase recovers from a stale interruption.
+  private func prepareAudio() {
     let session = AVAudioSession.sharedInstance()
-    guard session.category == .soloAmbient else { return }
-    try? session.setCategory(.playback, mode: .voicePrompt, options: [.duckOthers])
+    if session.category != .playback || session.mode != .spokenAudio
+      || session.categoryOptions != [.mixWithOthers]
+    {
+      try? session.setCategory(.playback, mode: .spokenAudio, options: [.mixWithOthers])
+    }
     try? session.setActive(true)
+    refreshAudioRoute()
+  }
+
+  private func refreshAudioRoute() {
+    let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+    let name = outputs.isEmpty ? "No audio output" : outputs.map(\.portName).joined(separator: ", ")
+    let bt = outputs.contains { [.bluetoothA2DP, .bluetoothHFP, .bluetoothLE].contains($0.portType) }
+    if audioRoute != name { audioRoute = name }
+    if audioOnBluetooth != bt { audioOnBluetooth = bt }
   }
 
   // MARK: Routes

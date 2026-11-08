@@ -169,6 +169,12 @@ of the real route in both directions.
 
 **First real test (people, not agents)**
 
+0. Phone and glasses only, no laptop. This tests directions, not obstacles:
+   with no hub, obstacle alerts are off, the screen shows a red banner, and the
+   opening phrase says "Obstacle alerts are off." Glasses connected in Meta AI;
+   on the Campus route screen check **Speech:** names the glasses (if it says
+   iPhone Speaker, tap the output button next to it). No camera stream needed.
+   Then do step 1 below.
 1. Outdoors near ECSW. Use **Add 40 m straight test from here**: face along
    it, then sideways, then backwards. Check that you hear straight on, turn
    left or right, and turn around.

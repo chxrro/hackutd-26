@@ -5,6 +5,7 @@
 // direction, and whether the hub's obstacle alerts are running. Supervised demo only.
 //
 
+import AVKit
 import MapKit
 import SwiftUI
 
@@ -50,6 +51,10 @@ struct CampusRouteView: View {
     .navigationBarTitleDisplayMode(.inline)
     .onAppear {
       nav.hubAlerting = { [app] in HubGate.isAlerting(app.hubStatus, fresh: app.isStatusFresh()) }
+      nav.obstacleAlertsRunning = { [app] in
+        guard app.isStatusFresh(), let s = app.hubStatus else { return false }
+        return s.mode != "fault" && s.healthy
+      }
       if let route = nav.route { camera = Self.fit(route) }
     }
     .onChange(of: nav.selectedRoute) { if let route = nav.route { camera = Self.fit(route) } }
@@ -80,6 +85,18 @@ struct CampusRouteView: View {
       }
       .pickerStyle(.segmented)
       Toggle("Speak directions", isOn: $nav.speechEnabled)
+      HStack {
+        Label(
+          nav.audioOnBluetooth ? "Speech: \(nav.audioRoute)" : "Speech: \(nav.audioRoute). Not the glasses.",
+          systemImage: nav.audioOnBluetooth ? "headphones" : "speaker.wave.2.fill"
+        )
+        .foregroundStyle(nav.audioOnBluetooth ? Color.primary : Color.orange)
+        .font(.footnote)
+        Spacer()
+        AudioRoutePicker()
+          .frame(width: 32, height: 32)
+          .accessibilityLabel("Choose audio output")
+      }
       switch nav.mode {
       case .idle:
         Button("Start live guidance") { nav.startLive() }
@@ -100,6 +117,16 @@ struct CampusRouteView: View {
 }
 
 // MARK: - Pieces
+
+/// The system output picker, to send speech to the glasses.
+private struct AudioRoutePicker: UIViewRepresentable {
+  func makeUIView(context: Context) -> AVRoutePickerView {
+    let v = AVRoutePickerView()
+    v.prioritizesVideoDevices = false
+    return v
+  }
+  func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
+}
 
 private struct ObstacleAlertBanner: View {
   let app: AppModel
