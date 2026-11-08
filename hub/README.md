@@ -12,6 +12,7 @@ haptic_hub/
   sources/           where frames come from
     glasses.py         WebSocket server for the phone (default)
     camera.py          webcam, video file, or live network stream (OpenCV/FFmpeg)
+    replay.py          plays back a --record session (replay:DIR)
   perception/        frame -> risk per sector
     vision.py          fuses depth + tracked objects
     models.py          Depth Anything V2 and YOLO + ByteTrack wrappers
@@ -27,6 +28,8 @@ haptic_hub/
     ble.py             the ESP32 over BLE (bleak)
     sim.py             simulator
   viz.py             --show debug window
+  record.py          opt-in frame recording (--record), wraps any source
+  latency.py         per-stage hub latency, logged every 5 s
 ```
 
 ## Setup
@@ -79,6 +82,77 @@ Live sources (`webcam`, `stream`) reconnect on their own if the feed drops.
 While the feed is down the belt plays the fault pattern. Files play at their
 own frame rate and loop. With `--belt sim` the terminal shows the belt, e.g.
 `belt LEVELS [ ▃█▃ ]`.
+
+## Recording and replay
+
+Recording is **off** unless you pass `--record`. It works with any source
+(glasses, webcam, video, stream, even a replay) and doesn't change how the
+source behaves.
+
+```bash
+# Record a glasses session (prints "RECORDING ON: ... session-001")
+uv run haptic-hub run --record
+
+# Replay it through the same pipeline at its original timing
+uv run haptic-hub run --source replay:recordings/session-001 --belt sim --show
+```
+
+Each session goes to the next numbered folder, `hub/recordings/session-NNN/`
+(git-ignored; `--record-dir` changes the parent folder):
+
+- `000001.jpg`, ... the frames as the hub decoded them, re-encoded as JPEG (quality 90)
+- `frames.jsonl` one line per saved frame: `seq` (the sender's), `file`,
+  `received_at` (hub `time.monotonic()`, s), `t` (s since recording started),
+  `capture_ms` (the sender's clock, **not** synchronized with the hub; `null`
+  if the source has none), `source`, `width`, `height`
+- `session.json` source, start time, limits, and on exit the frames written /
+  dropped and why recording stopped
+
+Limits: recording stops after `--record-minutes` (10) or `--record-max-frames`
+(6000) saved frames, whichever comes first. The hub keeps running.
+`--record-every K` saves every K-th frame. Frames are written by a background
+thread through a 16-frame queue. If the disk falls behind, the hub drops the
+*recorded copy* and logs it, so perception and the belt heartbeat never wait
+on the disk. Frames from the glasses are decoded and re-encoded, so recorded
+JPEGs are not byte-identical to what the phone sent.
+
+Replay (`--source replay:DIR`) plays a session once at the hub receive timing
+it was recorded with, then stops sending frames, so the belt goes to the fault
+pattern like a dropped camera. The status `source`, logs and the `--show`
+banner say `replay:session-NNN`, so a replay can't pass as a live run. Replayed
+frames get a fresh hub receive time and no `capture_ms`.
+
+Recordings can show people's faces and places. Get consent, don't commit or
+share them, and delete them when done.
+
+## Latency
+
+Every 5 s the hub logs one line of per-stage timings on its own clock
+(median/p90 in ms over that window). For example, `--perception vision` on
+an M-series MacBook (MPS) playing a 20 fps synthetic video made from one still
+photo (not glasses footage, not a validated figure):
+
+```text
+[video:bus_approach.mp4] latency ms p50/p90 | 5s: in 18.8 fps, perception 18.8 fps, dropped 0 | queue 0/0 | infer 34/37 | to belt 26/48 | hub total 61/82 | capture->recv (unsynced clocks, info only) 0/1
+```
+
+The same model was slower in other runs on the same laptop (inference p90
+150–210 ms, perception 6–12 fps with frames dropped), so read the line during
+your own run rather than relying on these numbers.
+
+- `in` frames reaching the hub per second; `perception` results per second;
+  `dropped` frames replaced in the 1-slot buffer before perception took them.
+- `queue` receive → perception start. `infer` the model's own time.
+  `to belt` perception done → the first belt command sent after it (the belt
+  loop ticks at 15 Hz, so expect about half a tick). It is when the hub hands
+  the command to BLE, not when the motor moves. `hub total` receive → that command.
+- `capture->recv (unsynced clocks, info only)` appears when the sender stamps
+  `capture_ms` (the phone does). The phone's clock isn't synchronized with
+  the laptop's, so it includes the clock offset and can even be negative.
+  Don't quote it as network latency.
+
+`--show` draws a short version at the bottom of the window. None of this is
+sent to the phone: the status message is unchanged (`docs/protocol.md`).
 
 ## People vs. objects
 

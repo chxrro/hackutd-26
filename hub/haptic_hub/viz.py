@@ -16,6 +16,7 @@ WINDOW = "haptic hub"
 class DebugView:
     def __init__(self, width: int = 480) -> None:
         self.width = width
+        self.latency_line: str | None = None  # set by the hub every few seconds
 
     def show(self, frame: Frame, result: PerceptionResult, cmd: BeltCommand, reason: str | None) -> bool:
         """Draws one frame. Returns False if the user pressed q or Esc."""
@@ -32,6 +33,8 @@ class DebugView:
             p2 = (int(box.x2 * box_scale), int(box.y2 * box_scale))
             cv2.rectangle(img, p1, p2, color, 2)
             cv2.putText(img, text, (p1[0], p1[1] - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+        if self.latency_line:
+            cv2.putText(img, self.latency_line, (6, h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
         if (classifier := _classifier_line(result.debug)) is not None:
             cv2.putText(img, classifier, (6, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
 

@@ -4,6 +4,8 @@
   haptic-hub run --source webcam --belt sim --show
   haptic-hub run --source stream:rtsp://192.168.1.50:8554/live
   haptic-hub run --perception sweep      bench-test belt + phone without any model
+  haptic-hub run --record                also save incoming frames to hub/recordings/ (opt-in)
+  haptic-hub run --source replay:recordings/session-001 --belt sim --show   replay a session
   haptic-hub run --source webcam --belt sim --show --classifier nim   cloud person/object labels
   haptic-hub nim-bench --image photo.jpg measure cloud classifier round trips
   haptic-hub belt-test                   buzz each motor in order
@@ -48,6 +50,13 @@ def _make_source(spec: str, cfg: HubConfig):
         from haptic_hub.sources.glasses import GlassesServer
 
         return GlassesServer(cfg.ws_host, cfg.ws_port)
+    if spec.startswith("replay:"):
+        from haptic_hub.sources.replay import ReplaySource
+
+        try:
+            return ReplaySource(spec.partition(":")[2])
+        except (OSError, ValueError) as exc:
+            raise SystemExit(f"can't replay: {exc}") from exc
     from haptic_hub.sources.camera import OpenCVSource
 
     kind, _, target = spec.partition(":")
@@ -105,7 +114,27 @@ async def _run(args: argparse.Namespace) -> None:
         viewer = DebugView()
 
     status_sink = source if hasattr(source, "publish") else None
+    source = _wrap_recording(args, source)
     await Hub(cfg, source, perception, belt, status_sink, viewer).run()
+
+
+def _wrap_recording(args: argparse.Namespace, source):
+    """--record: save every incoming frame (any source) without changing the source."""
+    if not args.record:
+        return source
+    from haptic_hub.record import DEFAULT_DIR, RecordingSource, Recorder, RecordLimits
+
+    limits = RecordLimits(max_minutes=args.record_minutes, max_frames=args.record_max_frames, every=args.record_every)
+    return RecordingSource(source, Recorder(args.record_dir or DEFAULT_DIR, limits))
+
+
+def _add_record_args(p: argparse.ArgumentParser) -> None:
+    g = p.add_argument_group("recording (off unless --record)")
+    g.add_argument("--record", action="store_true", help="save incoming frames as JPEG + frames.jsonl in a numbered session folder")
+    g.add_argument("--record-dir", help="where session folders go (default: hub/recordings, git-ignored)")
+    g.add_argument("--record-minutes", type=float, default=10.0, help="stop recording after this many minutes (default 10)")
+    g.add_argument("--record-max-frames", type=int, default=6000, help="stop recording after this many saved frames (default 6000)")
+    g.add_argument("--record-every", type=int, default=1, help="save every k-th frame (default 1 = all)")
 
 
 def _load_env_file(path: str) -> None:
@@ -253,7 +282,7 @@ def main() -> None:
     run.add_argument(
         "--source",
         default="glasses",
-        help="glasses (default), webcam[:N], video:PATH, or stream:URL (rtsp://, http:// MJPEG, ...)",
+        help="glasses (default), webcam[:N], video:PATH, stream:URL (rtsp://, http:// MJPEG, ...), or replay:DIR (a --record session)",
     )
     run.add_argument("--perception", default="vision", choices=["vision", "depth", "detector", "sweep"])
     run.add_argument(
@@ -276,6 +305,7 @@ def main() -> None:
     )
     run.add_argument("--prompts", help='openvocab only: comma-separated prompts, e.g. "person,pole,door,stairs" (default: config.py)')
     _add_classifier_args(run)
+    _add_record_args(run)
 
     test = sub.add_parser("belt-test", help="buzz each motor in order over BLE")
     test.add_argument("--address")
