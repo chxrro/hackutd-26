@@ -209,6 +209,22 @@ def status_unhealthy_within(t_event: float, max_delay: float, reason: str | None
     return check
 
 
+def status_uncertain(sectors: int | Sequence[int], t0: float, t1: float, expected: bool = True,
+                     min_frac: float = 0.8) -> Check:  # fmt: skip
+    """The phone's status marks (or doesn't mark) an uncertain detection in these sectors
+    (status sectors[i].uncertain, docs/protocol.md)."""
+    ss = _sectors(sectors)
+
+    def check(tl: Timeline) -> CheckResult:
+        msgs = [m for t, m in tl.statuses if t0 <= t <= t1 and m.get("type") == "status" and m.get("sectors")]
+        f = _frac(msgs, lambda m: all(bool(m["sectors"][i].get("uncertain")) == expected for i in ss))
+        word = "uncertain" if expected else "not uncertain"
+        return CheckResult(f"status sector {_names(ss)} {word} {t0:g}-{t1:g}s", f >= min_frac,
+                           f"{f:.0%} of {len(msgs)} msgs (need {min_frac:.0%})")  # fmt: skip
+
+    return check
+
+
 def no_collision() -> Check:
     def check(tl: Timeline) -> CheckResult:
         return CheckResult("no collision", not tl.collisions, f"{tl.collisions}" if tl.collisions else "clear")

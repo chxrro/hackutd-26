@@ -99,6 +99,26 @@ Simulated world (2026-11-07, `hub/haptic_hub/sim/`, **simulation only**): a ray-
 
 Hardware bring-up kit (2026-11-08, `hub/` + docs): `haptic-hub bench` (motor map, levels, TTL failsafe, fault by command and by dropped link, reconnect, BLE write timing, JSON report; optional `--serial` to time TTL expiry from the belt's log) and the runbook [hardware-bringup.md](hardware-bringup.md). Tested only in simulation: the real `belt_core` logic compiled for the host (TTL 250 ms observed at ~254 ms), a Python TTL model, a fake BLE client and a pty serial port. **Not yet run on the real belt.** The runbook lists firmware/protocol gaps found (no BLE status characteristic, no firmware version in info) as proposals.
 
+Perception fixes (2026-11-08, branch `chxrro/perception-fixes`, **simulation only**):
+- Depth obstacles are measured relative to a RANSAC-fitted floor plane. This
+  needs the camera's horizontal FOV, which is still assumed to be 60°. If the
+  floor fit isn't trusted, a frame falls back to the old image band.
+- Box-growth TTC fits 1/height, with fit-quality gating and a change-point cap.
+- Detections below `detector_conf` are reported as `sectors[i].uncertain` in
+  the status (an additive protocol field). They don't drive the belt.
+
+With ground-truth perception, 38/38 gating scenarios pass, including new ones for
+the ceiling, looking down 15–20°, a 0.45 m box in view, on-time TTC and 4 px box
+jitter. Before the change, 10 of those failed. On a synthetic h = k/Z series the
+TTC bias went from +0.6 s to under +0.1 s.
+
+Real Depth Anything on the flat renders passes the same scenarios as before,
+except `head_bob_walk` (21% buzzing). Not run on real footage. Open:
+- low obstacles are lost below the frame at about 1.1 m;
+- uncertain detections don't vibrate the belt (a team decision);
+- measure the real FOV;
+- replay real clips in both depth geometries.
+
 None of the perception thresholds have been validated against measured distances.
 
 ## Milestones merged 2026-11-07/08: evidence and limits

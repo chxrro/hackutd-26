@@ -24,6 +24,7 @@ from haptic_hub.control import (
     Control,
     redact,
     sector_kinds,
+    sector_uncertain,
 )
 from haptic_hub.perception.classify import ClassifiedBox, ClassifiedPerception
 from haptic_hub.perception.models import TrackedBox
@@ -529,9 +530,19 @@ def test_status_fields_shape_and_stale_results_give_no_kinds():
     c = Control(HubConfig())
     fields = c.status_fields(_classified_result(), OK, 5)
     assert set(fields) == {"paused", "settings", "sectors"}
-    assert fields["sectors"][0] == {"kind": "person"} and len(fields["sectors"]) == 5
+    assert fields["sectors"][0] == {"kind": "person", "uncertain": False} and len(fields["sectors"]) == 5
     stale = c.status_fields(_classified_result(), Health(False, "no camera frames for 2.0 s"), 5)
-    assert stale["sectors"] == [{"kind": None}] * 5  # an old result says nothing about now
+    assert stale["sectors"] == [{"kind": None, "uncertain": False}] * 5  # an old result says nothing about now
+
+
+def test_status_marks_uncertain_sectors_only_while_fresh():
+    c = Control(HubConfig())
+    sectors = tuple(SectorRisk(0.0, uncertain=(i == 3)) for i in range(5))
+    result = PerceptionResult(1, 0.0, sectors, 1.0, {})
+    assert [s["uncertain"] for s in c.status_fields(result, OK, 5)["sectors"]] == [False, False, False, True, False]
+    stale = c.status_fields(result, Health(False, "perception failing: boom"), 5)
+    assert [s["uncertain"] for s in stale["sectors"]] == [False] * 5
+    assert sector_uncertain(None, 5) == [False] * 5
 
 
 def test_redact_hides_the_code():

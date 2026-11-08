@@ -107,7 +107,7 @@ def _reset_tracking(perc: Any) -> None:
     from haptic_hub.perception.ttc import TtcEstimator
 
     if hasattr(perc, "_ttc"):
-        perc._ttc = TtcEstimator()
+        perc._ttc = TtcEstimator.from_config(perc.cfg)
     motion = getattr(perc, "motion", None)
     if motion is not None and type(motion).__name__ == "FlowMotion":  # fresh optical-flow state per scenario
         perc.motion = type(motion)(motion.cfg, motion.sectors, motion.ttc_near_s, motion.ttc_far_s)
@@ -125,6 +125,7 @@ async def run_scenario(
 ) -> Report:
     cfg = HubConfig()
     cfg.perception.motion = motion
+    cfg.perception.hfov_deg = scenario.camera.hfov_deg  # a scenario may override (e.g. a wrong assumed FOV)
     if scenario.configure is not None:
         scenario.configure(cfg)
     world = scenario.build()

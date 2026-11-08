@@ -28,6 +28,9 @@ class SectorRisk:
     nearest_m: float | None = None  # estimated distance; unvalidated monocular estimate
     ttc_s: float | None = None  # estimated time to collision from box growth
     label: str | None = None  # detector class driving the risk, if any
+    # A detection scored below the confident threshold overlaps this sector. It does not
+    # drive `risk`; it is reported so an uncertain object is never silently "nothing".
+    uncertain: bool = False
 
 
 @dataclass(frozen=True)
