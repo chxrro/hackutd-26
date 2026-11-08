@@ -125,12 +125,17 @@ share them, and delete them when done.
 ## Latency
 
 Every 5 s the hub logs one line of per-stage timings on its own clock
-(median/p90 in ms over that window), e.g. (sweep perception on a replay, not a
-real model):
+(median/p90 in ms over that window). For example, `--perception vision` on
+an M-series MacBook (MPS) playing a 20 fps synthetic video made from one still
+photo (not glasses footage, not a validated figure):
 
 ```text
-[replay:session-001] latency ms p50/p90 | 5s: in 14.4 fps, perception 14.4 fps, dropped 0 | queue 0/1 | infer 20/20 | to belt 28/50 | hub total 52/75
+[video:bus_approach.mp4] latency ms p50/p90 | 5s: in 18.8 fps, perception 18.8 fps, dropped 0 | queue 0/0 | infer 34/37 | to belt 26/48 | hub total 61/82 | capture->recv (unsynced clocks, info only) 0/1
 ```
+
+The same model was slower in other runs on the same laptop (inference p90
+150–210 ms, perception 6–12 fps with frames dropped), so read the line during
+your own run rather than relying on these numbers.
 
 - `in` frames reaching the hub per second; `perception` results per second;
   `dropped` frames replaced in the 1-slot buffer before perception took them.
