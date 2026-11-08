@@ -25,6 +25,15 @@ glasses ─▶ meta/ ──WebSocket──▶ hub/ ──BLE──▶ esp32/ ─
 
 Quick start without any hardware: `cd hub && uv sync --extra vision && uv run haptic-hub run --source webcam --belt sim --show`
 
+## CI
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every PR into `main` and every push to `main`, on Ubuntu only:
+
+- **hub**: `cd hub && uv sync --frozen && uv run pytest`. This is the core install only. torch, ultralytics and clip are not installed, so no model weights load or download.
+- **firmware**: `cd esp32 && pio test -e native` (host logic tests), then `pio run -e esp32dev` (compile only, nothing is flashed).
+
+The `docs/protocol.md` golden vectors are checked by `hub/tests/test_protocol.py` and `esp32/test/test_belt_core`, so both jobs cover them. The iOS app (`meta/`) is not built in CI, because macOS runners are expensive. CI does not exercise real models, a camera, BLE or the belt.
+
 ## Camera diagnostic
 
 [Camera Bridge](docs/camera-bridge.md) is a standalone iPhone and Mac diagnostic for USB screen mirroring and local browser preview. The USB preview passed with a simulated test pattern. The live Ray-Ban test is pending an update to the app component on the glasses.
