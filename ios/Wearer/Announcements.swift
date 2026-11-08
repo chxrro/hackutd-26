@@ -117,3 +117,55 @@ struct SectorSpeechGate: Sendable {
     return phrase
   }
 }
+
+/// Turns a stream of wearer conditions into state announcements, through one
+/// `AnnouncementGate`. "Recovered" / "Resumed" are worded against what the
+/// wearer last heard, not against a short-lived state the rate limit swallowed.
+/// The short resume cue (`.resuming`) is shown but never spoken, and it leaves
+/// what was heard and anything held untouched.
+struct WearerAnnouncer: Sendable {
+  private(set) var gate: AnnouncementGate
+  private(set) var shown: WearerCondition
+  /// The condition whose announcement the wearer last heard, and the one held by the gate.
+  private var spoken: WearerCondition?
+  private var held: WearerCondition?
+
+  /// `initial` is the state on screen at launch, which VoiceOver reads anyway.
+  init(initial: WearerCondition, minInterval: TimeInterval = 3) {
+    gate = AnnouncementGate(minInterval: minInterval, initialKey: initial.kind.key)
+    shown = initial
+  }
+
+  /// Call on every update. Returns what to speak now, if anything, and the tone for its haptic.
+  mutating func update(_ new: WearerCondition, now: TimeInterval) -> (announcement: Announcement, tone: WearerTone)? {
+    if new != shown {
+      let heard = spoken ?? shown
+      shown = new
+      if new.kind == .resuming {
+        // Quiet: keep what was heard and anything held.
+      } else if let text = WearerStatus.announcement(from: heard, to: new) {
+        if let out = gate.submit(Announcement(key: new.kind.key, text: text), now: now) {
+          spoken = new
+          held = nil
+          return (out, new.tone)
+        }
+        held = gate.pending == nil ? nil : new
+      } else {
+        // Back to what the wearer last heard: drop anything held back.
+        gate.dropPending()
+        held = nil
+      }
+    }
+    if let out = gate.poll(now: now) {
+      spoken = held ?? shown
+      held = nil
+      return (out, shown.tone)
+    }
+    return nil
+  }
+
+  /// A one-off message (setup or control errors) through the same rate limit.
+  mutating func say(_ announcement: Announcement, now: TimeInterval) -> Announcement? {
+    gate.submit(announcement, now: now)
+  }
+}
