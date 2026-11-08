@@ -444,3 +444,12 @@ thresholds are not validated; tune on replayed clips
 - Person/object labels have not been checked for accuracy on our own footage,
   local or cloud. Cloud labels arrive a round trip late, so a new box shows its
   local label first.
+
+## Simulation
+
+`uv run python -m haptic_hub.sim` drives the whole chain in a simulated world:
+rendered glasses frames go over the real WebSocket protocol into this hub, and its
+belt commands go into the real belt firmware logic built for the host. It runs
+scripted scenarios (obstacle direction, approaching people, head motion, stale
+frames, disconnects, crashes, lost belt writes) and checks what the belt does.
+Results are simulation only. See [haptic_hub/sim/README.md](haptic_hub/sim/README.md).
