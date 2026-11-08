@@ -14,7 +14,7 @@ import pytest
 from haptic_hub.app import Hub
 from haptic_hub.belt.sim import SimBelt
 from haptic_hub.config import ClassifierConfig, HubConfig
-from haptic_hub.perception.classify import ClassifiedPerception, ClassifierUnavailable, local_kind
+from haptic_hub.perception.classify import ClassifiedPerception, local_kind
 from haptic_hub.perception.models import TrackedBox
 from haptic_hub.perception.nim import (
     ChatClient,
@@ -162,22 +162,31 @@ def test_requests_are_rate_limited():
     assert len(client.bodies) == 2
 
 
-def test_cloud_failure_becomes_unavailable_after_stale_s_then_recovers():
-    clock = FakeClock()
-    client = FakeClient(error=CloudError("TimeoutError: timed out"))
-    perception = ClassifiedPerception(FakeInner(), labeler(client, clock, stale_s=1.0), clock)
+def origins(result):
+    return {c.origin for c in result.debug["classified"]}
 
-    perception.process(frame())  # first failure: still within the grace period
+
+def test_cloud_outage_falls_back_to_local_labels_then_recovers():
+    clock = FakeClock()
+    client = FakeClient()
+    perception = ClassifiedPerception(FakeInner(), labeler(client, clock, stale_s=1.0), clock)
+    assert origins(perception.process(frame())) == {"cloud"}
+
+    client.error = CloudError("TimeoutError: timed out")
     clock.t += 0.6
-    perception.process(frame())
+    result = perception.process(frame())  # within the grace period: cached cloud labels
+    assert origins(result) == {"cloud"} and not result.debug["classifier"].get("stale")
     clock.t += 0.6
-    with pytest.raises(ClassifierUnavailable, match="timed out"):
-        perception.process(frame())
+    result = perception.process(frame())  # no raise: the belt's risk must survive
+    assert origins(result) == {"local"}
+    assert result.debug["classifier"]["stale"] is True
+    assert "timed out" in result.debug["classifier"]["error"]
+    assert [s.risk for s in result.sectors] == [0.0, 0.0, 0.5, 0.0, 0.0]
 
     client.error = None  # network comes back
     clock.t += 0.6
     result = perception.process(frame())
-    assert {c.origin for c in result.debug["classified"]} == {"cloud"}
+    assert origins(result) == {"cloud"} and not result.debug["classifier"].get("stale")
 
 
 @pytest.mark.parametrize(
@@ -188,8 +197,8 @@ def test_any_cloud_error_counts_as_stale(error):
     perception = ClassifiedPerception(FakeInner(), labeler(FakeClient(error=error), clock, stale_s=0.5), clock)
     perception.process(frame())
     clock.t += 0.6
-    with pytest.raises(ClassifierUnavailable):
-        perception.process(frame())
+    result = perception.process(frame())
+    assert result.debug["classifier"]["stale"] is True and origins(result) == {"local"}
 
 
 def test_unparseable_reply_counts_as_failure():
@@ -197,8 +206,8 @@ def test_unparseable_reply_counts_as_failure():
     perception = ClassifiedPerception(FakeInner(), labeler(FakeClient("no idea"), clock, stale_s=0.5), clock)
     perception.process(frame())
     clock.t += 0.6
-    with pytest.raises(ClassifierUnavailable, match="no labels"):
-        perception.process(frame())
+    result = perception.process(frame())
+    assert "no labels" in result.debug["classifier"]["error"] and origins(result) == {"local"}
 
 
 def test_no_boxes_means_no_reply_is_owed():
@@ -226,14 +235,14 @@ def test_hung_request_in_background_still_goes_stale():
     try:
         perception.process(frame())
         time.sleep(0.3)
-        with pytest.raises(ClassifierUnavailable, match="no reply yet"):
-            perception.process(frame())
+        result = perception.process(frame())
+        assert "no reply yet" in result.debug["classifier"]["error"] and origins(result) == {"local"}
     finally:
         release.set()
         lab.close()
 
 
-# -- end to end: cloud outage reaches the belt as the fault pattern ----------
+# -- end to end: a cloud outage must not take the collision alerts away -------
 
 
 class FakeSource:
@@ -250,18 +259,19 @@ class FakeSource:
             await asyncio.sleep(1 / 30)
 
 
-def test_cloud_outage_drives_belt_to_fault_not_silence():
+def test_cloud_outage_keeps_collision_alerts_with_local_labels():
     cfg = HubConfig()
     client = FakeClient()
     lab = NimLabeler(client, "m", ClassifierConfig(backend="nim", stale_s=0.3, max_hz=20), background=True)
     belt = SimBelt(5)
     hub = Hub(cfg, FakeSource(), ClassifiedPerception(FakeInner(), lab), belt)
-    modes = []
+    modes, cloud_before = [], set()
 
     async def scenario():
         task = asyncio.create_task(hub.run())
         for i in range(40):
             if i == 15:
+                cloud_before.update(origins(hub.result))
                 client.error = CloudError("ConnectionResetError")  # the network drops
             await asyncio.sleep(0.05)
             modes.append(belt.last.mode)
@@ -275,9 +285,11 @@ def test_cloud_outage_drives_belt_to_fault_not_silence():
         asyncio.run(scenario())
     finally:
         lab.close()
-    assert BeltMode.LEVELS in modes[:15], modes  # cloud healthy: normal alerts
-    assert modes[-1] == BeltMode.FAULT, modes  # cloud gone: fault pattern
-    assert "perception failing" in (hub.reason or "")
+    assert cloud_before == {"cloud"}  # healthy cloud: cloud labels
+    # Cloud gone for 1.25 s (> stale_s): the obstacle in sector 2 is still felt.
+    assert modes[-10:] == [BeltMode.LEVELS] * 10, modes
+    assert hub.reason is None
+    assert origins(hub.result) == {"local"} and hub.result.debug["classifier"]["stale"] is True
 
 
 # -- HTTP client against a loopback server ----------------------------------

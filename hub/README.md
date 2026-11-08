@@ -92,9 +92,11 @@ draws people in magenta (`PERSON #3 (local)`) and objects in orange
   the frame and asks the model which are people. The answer is cached per track
   ID. A box without a cloud answer yet keeps its local label, marked `(local)`.
   If boxes wait longer than `stale_s` (3 s) for an answer (timeout, no network,
-  HTTP 429, an unreadable reply), the hub reports `perception failing:
-  ClassifierUnavailable` and the belt plays the **fault pattern**. The window
-  freezes on its last frame while that lasts.
+  HTTP 429, an unreadable reply), every box falls back to its local label and
+  the window shows `ERR cloud classifier: no labels for ...`. The belt keeps
+  its normal collision alerts: labels don't drive it, so a labeling outage
+  must not replace real depth and TTC alerts with the fault pattern. If labels
+  ever drive the belt, an unavailable classifier has to become a fault.
 
 Objects the detector doesn't know (walls, poles, curbs) produce no box, so they
 get no label. They are only covered by the depth risk.
