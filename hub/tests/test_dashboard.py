@@ -158,6 +158,8 @@ def test_preview_without_result_is_the_raw_frame():
         ({"reason": None, "paused": False, "belt": "connected"}, "ok", "Alerts active"),
         ({"reason": "alerts paused", "paused": True, "belt": "connected"}, "paused", "Alerts paused"),
         ({"reason": "belt test", "paused": False, "belt": "simulated"}, "test", "Belt test running"),
+        ({"reason": "stopped by wearer", "paused": False, "stopped": True, "belt": "connected"}, "stopped", "Stopped by wearer"),
+        ({"reason": "belt disconnected", "stopped": True, "belt": "disconnected"}, "fault", "FAULT: belt disconnected"),
         ({"reason": "no camera frames for 1.2 s", "paused": False, "belt": "connected"}, "fault", "FAULT: no camera frames for 1.2 s"),
         ({"reason": "no camera frames for 1.2 s", "paused": True, "belt": "connected"}, "fault", "FAULT: no camera frames for 1.2 s"),
         ({"reason": "belt disconnected", "paused": True, "belt": "disconnected"}, "fault", "FAULT: belt disconnected"),
@@ -174,7 +176,8 @@ def test_banner(status, level, title):
 
 
 def test_banner_never_calls_silence_a_clear_path():
-    for b in (banner({"reason": None, "belt": "simulated"}), banner({"reason": "alerts paused", "paused": True})):
+    for b in (banner({"reason": None, "belt": "simulated"}), banner({"reason": "alerts paused", "paused": True}),
+              banner({"reason": "stopped by wearer", "stopped": True})):
         assert "not a clear path" in b["detail"] or "not mean the path is clear" in b["detail"]
 
 

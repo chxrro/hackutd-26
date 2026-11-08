@@ -64,6 +64,12 @@ final class AppModel: ObservableObject {
     private var firstFrameAt: ContinuousClock.Instant?
     /// When the hub's status first said "resuming alerts" without a break.
     private var resumingSince: ContinuousClock.Instant?
+    /// The wearer's last Stop, until the next Start: whether the hub confirmed it,
+    /// when it was requested and when the hub acknowledged it (to read later statuses against).
+    private var wearerStop: WearerStop?
+    private var stopRequestedAt: Date?
+    private var stopAckedAt: Date?
+    private var stopAttempt = 0
     /// After the first frame, keep saying "Starting" this long while the hub warms up.
     private static let warmUp: Duration = .seconds(2)
 
@@ -126,20 +132,50 @@ final class AppModel: ObservableObject {
         }
         bridge.start(source, destination: .hub)
         guard isRunning else { return }
+        // The hub ends its stop on our "starting" phone_status (or the first frame).
+        clearWearerStop()
         // Start means alerts on: undo an earlier Stop or Pause once the hub reports it.
         resumeAfterStart = hub.hasControlCode
         update()
     }
 
-    /// Stop pauses the hub first (explicit: the belt plays the pause cue) when the
-    /// control code allows it. Either way the hub then sees frames stop, and its
-    /// "no camera frames" fault outranks the pause, so the belt plays the fault pattern.
+    /// Stop tells the hub first (`end_session`, docs/protocol.md "Deliberate stop vs.
+    /// lost phone"), then stops the camera. A hub that accepts it plays the
+    /// session-ended cue and stays quiet. Without the control code or a link, or if
+    /// the hub refuses or doesn't answer, it sees frames stop like a lost phone and
+    /// plays the fault pattern; the wearer is told which. HubClient holds frames
+    /// from the moment `end_session` is sent, so none can follow it.
     func stopAlerts() {
         play(.tap)
         resumeAfterStart = false
-        if hub.hasControlCode, hub.link == .connected, !isPaused { hub.send(.pause) }
+        stopAttempt += 1
+        let attempt = stopAttempt
+        stopRequestedAt = .now
+        stopAckedAt = nil
+        if hub.hasControlCode, hub.link == .connected {
+            wearerStop = .sending
+            hub.send(.endSession) { [weak self] result in
+                guard let self, self.stopAttempt == attempt, self.wearerStop != nil else { return }
+                if result == .ok {
+                    self.wearerStop = .confirmed
+                    self.stopAckedAt = .now
+                } else {
+                    self.wearerStop = .notConfirmed(result.message)
+                }
+                self.update()
+            }
+        } else {
+            wearerStop = .notConfirmed(hub.hasControlCode ? "The hub isn’t connected." : "No hub control code.")
+        }
         bridge.stop()
         update()
+    }
+
+    private func clearWearerStop() {
+        stopAttempt += 1
+        wearerStop = nil
+        stopRequestedAt = nil
+        stopAckedAt = nil
     }
 
     func togglePause() {
@@ -157,7 +193,7 @@ final class AppModel: ObservableObject {
     }
 
     /// Called when the app leaves the foreground. iOS would suspend the stream anyway;
-    /// this is not a deliberate stop, so the hub is left to show its fault pattern.
+    /// this is not a deliberate stop: no `end_session`, so the hub plays its fault pattern.
     func appWentToBackground() {
         if isRunning {
             bridge.fail("Stopped when the app went into the background.")
@@ -183,6 +219,7 @@ final class AppModel: ObservableObject {
 
     func forgetPairing() {
         if isRunning { bridge.stop() }
+        clearWearerStop()
         PairingStore.clear()
         codeNotSaved = false
         pairing = nil
@@ -248,6 +285,8 @@ final class AppModel: ObservableObject {
         input.status = hub.status
         input.statusAge = hub.statusAge()
         input.cameraFrameAge = bridge.lastFrame.map { Self.seconds($0.duration(to: .now)) }
+        input.wearerStop = wearerStop
+        input.hubStopped = hubStoppedSinceStop()
         if let status = hub.status, !status.isPaused, status.reason == WearerStatus.resumingReason {
             let since = resumingSince ?? .now
             resumingSince = since
@@ -256,6 +295,18 @@ final class AppModel: ObservableObject {
             resumingSince = nil
         }
         return input
+    }
+
+    /// The hub's `stopped` flag from a status that arrived after the Stop request
+    /// (counts when true) or after the hub acknowledged it (counts when false: an
+    /// earlier status may predate the stop).
+    private func hubStoppedSinceStop() -> Bool? {
+        guard wearerStop != nil, let requested = stopRequestedAt, let status = hub.status,
+            let at = hub.lastStatusAt, let stopped = status.stopped
+        else { return nil }
+        if stopped { return at > requested ? true : nil }
+        if let acked = stopAckedAt, at > acked { return false }
+        return nil
     }
 
     private func update() {

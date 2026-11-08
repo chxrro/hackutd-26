@@ -15,6 +15,10 @@
 //     does on the hub, and is the headline: "Warning: no camera frames (alerts paused)".
 //   - The short "resuming alerts" cue after Resume is not a warning. It is only
 //     announced as a warning if it lasts longer than `resumeTimeout`.
+//   - Stop tells the hub (`end_session`), so the belt plays the session-ended cue
+//     and stays quiet: "Stopped. The belt will not alert." If the hub wasn't told
+//     (no control code, no link, refused, no reply), it can't tell the stop from
+//     a lost phone and plays the fault pattern, and the app says so.
 //
 // Pure logic, no UIKit, so it is unit tested.
 //
@@ -40,6 +44,14 @@ enum WearerKind: Hashable, Sendable {
   case resuming
   /// "resuming alerts" for longer than `WearerStatus.resumeTimeout`: unexpected, so a warning.
   case resumeStuck
+  /// The wearer pressed Stop; waiting for the hub to confirm `end_session`. Not announced.
+  case stopping
+  /// The hub confirmed the stop: session-ended cue, then a quiet belt.
+  case stoppedByWearer
+  /// The wearer pressed Stop but the hub wasn't told: it plays the fault pattern.
+  case stopNotConfirmed
+  /// The hub confirmed the stop, but its status now says it isn't stopped (e.g. it restarted).
+  case stopUndone
   case starting
   case noCameraFrames
   case fault(String)  // normalized hub reason, so "for 1.2 s" vs "for 1.4 s" is one fault
@@ -56,6 +68,9 @@ enum WearerKind: Hashable, Sendable {
   /// Healthy, but input or output is simulated: mock glasses, test pattern, simulated belt.
   case simulated(String)
   case alertsOn
+
+  /// Shown, never spoken: short states that resolve by themselves.
+  var isQuiet: Bool { self == .resuming || self == .stopping }
 
   /// Stable key for de-duplicating announcements.
   var key: String {
@@ -91,6 +106,16 @@ struct WearerCondition: Equatable, Sendable {
   var tone: WearerTone
 }
 
+/// The wearer pressed Stop in this app. Cleared by Start.
+enum WearerStop: Equatable, Sendable {
+  /// `end_session` sent; no reply yet.
+  case sending
+  /// The hub acknowledged `end_session`.
+  case confirmed
+  /// Not sent or refused (no control code, hub not connected, not paired, no reply, older hub).
+  case notConfirmed(String)
+}
+
 struct WearerInputs: Equatable, Sendable {
   enum Session: Equatable, Sendable {
     case off
@@ -116,6 +141,10 @@ struct WearerInputs: Equatable, Sendable {
   var cameraFrameAge: TimeInterval?
   /// Seconds the hub has reported `reason: "resuming alerts"` without a break; nil if it isn't.
   var resumingFor: TimeInterval?
+  var wearerStop: WearerStop?
+  /// The hub's own word on the stop: `stopped` from a status received after the
+  /// request (if true) or after the hub acknowledged it (if false); nil if none.
+  var hubStopped: Bool?
 }
 
 enum WearerStatus {
@@ -141,6 +170,7 @@ enum WearerStatus {
   static func condition(_ input: WearerInputs) -> WearerCondition {
     switch input.session {
     case .off:
+      if let stop = input.wearerStop { return stopped(stop, input) }
       return WearerCondition(
         kind: .off, sentence: "Alerts off",
         detail: input.paired
@@ -234,6 +264,33 @@ enum WearerStatus {
       tone: .ok)
   }
 
+  static let stoppedSentence = "Stopped"
+  static let stoppedDetail =
+    "The belt will not alert. Silence does not mean the path is clear. Press Start to start alerts again."
+
+  /// After Stop. A fresh hub status is the hub's own word and wins over the reply.
+  private static func stopped(_ stop: WearerStop, _ input: WearerInputs) -> WearerCondition {
+    let fresh = input.link == .connected && (input.statusAge.map { $0 <= statusTimeout } ?? false)
+    if input.hubStopped == true {
+      return WearerCondition(kind: .stoppedByWearer, sentence: stoppedSentence, detail: stoppedDetail, tone: .off)
+    }
+    switch stop {
+    case .sending:
+      return WearerCondition(kind: .stopping, sentence: "Stopping", detail: "Telling the hub to stop the belt.", tone: .off)
+    case .confirmed:
+      if fresh, input.hubStopped == false {
+        return warning(
+          .stopUndone, "Warning: hub no longer stopped",
+          "The hub isn’t in the stopped state any more, so the belt may play its fault pattern. Press Start, or stop the hub.")
+      }
+      return WearerCondition(kind: .stoppedByWearer, sentence: stoppedSentence, detail: stoppedDetail, tone: .off)
+    case .notConfirmed(let why):
+      return warning(
+        .stopNotConfirmed, "Stopped. Hub not told",
+        "\(why) The hub can’t tell this from a lost phone, so the belt plays its fault pattern. Press Start, or stop the hub.")
+    }
+  }
+
   private static func isBeltReason(_ reason: String) -> Bool {
     [beltDisconnectedReason, beltConnectingReason, beltNotAcknowledgingReason].contains(reason)
   }
@@ -288,7 +345,7 @@ enum WearerStatus {
   /// leave its record of what the wearer heard alone, so the state after it is
   /// worded against "Paused" ("Resumed. Alerts on.").
   static func announcement(from old: WearerCondition?, to new: WearerCondition) -> String? {
-    guard old?.kind != new.kind, new.kind != .resuming else { return nil }
+    guard old?.kind != new.kind, !new.kind.isQuiet else { return nil }
     let wasPaused: Bool
     switch old?.kind {
     case .paused?, .pausedFault?, .resuming?: wasPaused = true
@@ -313,6 +370,12 @@ enum WearerStatus {
     switch new.kind {
     case .off:
       return "Alerts off."
+    case .stoppedByWearer:
+      return "Stopped. The belt will not alert."
+    case .stopNotConfirmed:
+      return "Stopped. The hub wasn’t told, so the belt plays its fault pattern."
+    case .stopUndone:
+      return "Warning: the hub is no longer stopped. The belt may play its fault pattern."
     case .diagnostic:
       return "Diagnostic mode. No belt alerts."
     case .stopped:

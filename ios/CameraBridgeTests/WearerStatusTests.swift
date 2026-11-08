@@ -539,6 +539,107 @@ final class WearerStatusTests: XCTestCase {
     XCTAssertNil(SectorSpeech.phrase(for: HubStatus(levels: [0, 90], sectors: sectors)))
   }
 
+  // MARK: Stop (end_session)
+
+  private func stopped(_ stop: WearerStop?, hubStopped: Bool? = nil, edit: (inout WearerInputs) -> Void = { _ in })
+    -> WearerCondition
+  {
+    var input = WearerInputs(
+      session: .off, paired: true, link: .connected, status: HubStatus(), statusAge: 0.2,
+      wearerStop: stop, hubStopped: hubStopped)
+    edit(&input)
+    return WearerStatus.condition(input)
+  }
+
+  func testStopConfirmedSaysTheBeltWillNotAlert() {
+    let c = stopped(.confirmed)
+    XCTAssertEqual(c.kind, .stoppedByWearer)
+    XCTAssertEqual(c.sentence, "Stopped")
+    XCTAssertTrue(c.detail.hasPrefix("The belt will not alert."))
+    XCTAssertTrue(c.detail.contains("Silence does not mean the path is clear"))
+    XCTAssertEqual(c.tone, .off)
+    XCTAssertEqual(WearerStatus.announcement(from: condition(), to: c), "Stopped. The belt will not alert.")
+    // The hub's own status wins: it says stopped even before the reply arrives.
+    XCTAssertEqual(stopped(.sending, hubStopped: true).kind, .stoppedByWearer)
+    XCTAssertEqual(stopped(.notConfirmed("No reply."), hubStopped: true).kind, .stoppedByWearer)
+    // Link lost after the hub confirmed: the stop lives on the hub, so it still stands.
+    XCTAssertEqual(stopped(.confirmed, edit: { $0.link = .disconnected; $0.status = nil; $0.statusAge = nil }).kind,
+                   .stoppedByWearer)
+  }
+
+  func testStopWaitingForTheHubIsShownButNotSpoken() {
+    let c = stopped(.sending)
+    XCTAssertEqual(c.kind, .stopping)
+    XCTAssertNil(WearerStatus.announcement(from: condition(), to: c))
+  }
+
+  func testStopTheHubWasNotToldIsAWarningAboutTheFaultPattern() {
+    for why in ["No hub control code.", "The hub isn’t connected.", "The hub refused: not paired.",
+                "The hub refused: unknown action.", "No reply from the hub. It may not support settings yet."] {
+      let c = stopped(.notConfirmed(why))
+      XCTAssertEqual(c.kind, .stopNotConfirmed)
+      XCTAssertEqual(c.tone, .warning)
+      XCTAssertTrue(c.detail.hasPrefix(why))
+      XCTAssertTrue(c.detail.contains("fault pattern"))
+      XCTAssertEqual(WearerStatus.announcement(from: condition(), to: c),
+                     "Stopped. The hub wasn’t told, so the belt plays its fault pattern.")
+    }
+  }
+
+  func testStopUndoneWhenAFreshStatusSaysTheHubIsNoLongerStopped() {
+    let undone = stopped(.confirmed, hubStopped: false)
+    XCTAssertEqual(undone.kind, .stopUndone)
+    XCTAssertEqual(undone.tone, .warning)
+    XCTAssertEqual(WearerStatus.announcement(from: stopped(.confirmed), to: undone),
+                   "Warning: the hub is no longer stopped. The belt may play its fault pattern.")
+    XCTAssertEqual(stopped(.confirmed, hubStopped: false, edit: { $0.statusAge = 5 }).kind, .stoppedByWearer)
+  }
+
+  func testNoStopFallsBackToAlertsOff() {
+    XCTAssertEqual(stopped(nil).kind, .off)
+    // A session that failed by itself (backgrounded, feed lost) is not a wearer's stop.
+    XCTAssertEqual(stopped(nil, edit: { $0.session = .stopped(reason: "Stopped when the app went into the background.") }).kind,
+                   .stopped)
+  }
+
+  func testAnnouncerSaysStoppedOnce() {
+    let on = condition()
+    let texts = spoken([
+      (10, stopped(.sending)), (10.2, stopped(.sending)), (10.3, stopped(.confirmed)),
+      (10.5, stopped(.confirmed, hubStopped: true)), (11, stopped(.confirmed, hubStopped: true)),
+      (20, stopped(.confirmed, hubStopped: true)),
+    ], start: on)
+    XCTAssertEqual(texts, ["Stopped. The belt will not alert."])
+  }
+
+  func testAnnouncerSaysStoppedOnceWhenTheReplyComesRightAfterAnotherAnnouncement() {
+    // A fault was just spoken; "Stopped" waits for the rate limit, then is spoken once.
+    let fault = condition { $0.status = HubStatus(mode: "fault", healthy: false, reason: "no camera frames for 1.2 s") }
+    var announcer = WearerAnnouncer(initial: condition(), minInterval: 3)
+    XCTAssertNotNil(announcer.update(fault, now: 0))
+    XCTAssertNil(announcer.update(stopped(.sending), now: 1))
+    XCTAssertNil(announcer.update(stopped(.confirmed), now: 1.2))
+    XCTAssertEqual(announcer.update(stopped(.confirmed), now: 3)?.announcement.text, "Stopped. The belt will not alert.")
+    XCTAssertNil(announcer.update(stopped(.confirmed, hubStopped: true), now: 4))
+    XCTAssertNil(announcer.update(stopped(.confirmed, hubStopped: true), now: 10))
+  }
+
+  func testAnnouncerStopNotConfirmedWarnsOnce() {
+    let texts = spoken([
+      (10, stopped(.sending)), (13, stopped(.notConfirmed("No reply."))), (14, stopped(.notConfirmed("No reply."))),
+    ], start: condition())
+    XCTAssertEqual(texts, ["Stopped. The hub wasn’t told, so the belt plays its fault pattern."])
+  }
+
+  func testStopWordingNeverClaimsAClearPathOrGivesTravelAdvice() {
+    let all = [stopped(.sending), stopped(.confirmed), stopped(.notConfirmed("No reply.")), stopped(.confirmed, hubStopped: false)]
+    let banned = ["clear path", "safe", "go left", "go right", "move ", "turn ", "walk "]
+    for c in all {
+      let text = (c.sentence + " " + c.detail).lowercased()
+      for word in banned { XCTAssertFalse(text.contains(word), "\(word) in \(text)") }
+    }
+  }
+
   func testSectorSpeechIsRateLimited() {
     var gate = SectorSpeechGate(minInterval: 4, repeatInterval: 15, quietAfterState: 2)
     let person = Announcement(key: "person:ahead", text: "Person ahead")

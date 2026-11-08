@@ -32,7 +32,7 @@ ALL = (0, 1, 2, 3, 4)
 @dataclass(frozen=True)
 class Fault:
     kind: str  # camera_freeze | phone_disconnect | garbage | latency | perception_crash |
-    #            perception_stall | belt_drop | belt_disconnect
+    #            perception_stall | belt_drop | belt_disconnect | user_stop | user_stop_unpaired
     start: float
     end: float
     value: float = 0.0
@@ -252,6 +252,34 @@ def _scenarios() -> list[Scenario]:
          c.status_reports(2.5 + belt_period + status_period + 0.1, 3.5, healthy=False, min_frac=1.0),
          c.recovers_within(3.5, 0.8), c.motors_on(2, 4.5, 5.5), c.status_reports(4.7, 5.5, healthy=True, min_frac=1.0)],
         [Fault("belt_disconnect", 2.5, 3.5)], fault,
+    ))  # fmt: skip
+    # The wearer's Stop vs. a phone that just goes away (docs/protocol.md "end_session").
+    s.append(Scenario(
+        "user_stop", "Pole ahead; at 2.5 s the wearer presses Stop (paired phone: end_session, then the camera "
+        "stops). The belt plays the session-ended cue and stays quiet, also while the phone's Wi-Fi drops "
+        "(4.0-4.8 s). Start at 5.5 s brings alerts back.", 8.0,
+        _pole_ahead(),
+        [c.motors_on(2, 1.0, 2.4), c.no_fault(2.5, 5.5), c.pulses((1, 3), 2.6, 4.3, count=3),
+         c.motors_off(ALL, 4.3, 5.5), c.status_reason(2.8, 5.4, "stopped by wearer"),
+         c.hub_reason(2.8, 5.4, "stopped by wearer"), c.motors_on(2, 6.6, 8.0), c.status_reports(7.0, 8.0, healthy=True),
+         c.counter("end_session_ok", lambda n: n == 1, "== 1"), c.counter("phone_connects", lambda n: n >= 2, ">= 2")],
+        [Fault("user_stop", 2.5, 5.5), Fault("phone_disconnect", 4.0, 4.8)], fault,
+    ))  # fmt: skip
+    s.append(Scenario(
+        "phone_vanishes", "Pole ahead; at 2.5 s the phone vanishes (WebSocket gone, no end_session) and never "
+        "comes back. The hub must play the fault pattern for as long as it runs.", 5.5,
+        _pole_ahead(),
+        [c.motors_on(2, 1.0, 2.4), c.fault_within(2.5, stale + belt_period + 0.15), c.fault_during(3.7, 5.5),
+         c.hub_reason(3.7, 5.5, "no camera frames"), c.counter("phone_connects", lambda n: n == 1, "== 1")],
+        [Fault("phone_disconnect", 2.5, 99.0)], fault,
+    ))  # fmt: skip
+    s.append(Scenario(
+        "user_stop_unpaired", "Pole ahead; a phone without the control code presses Stop at 2.5 s. end_session "
+        "is refused (not paired), so the hub treats it like a lost phone: fault pattern.", 5.0,
+        _pole_ahead(),
+        [c.motors_on(2, 1.0, 2.4), c.fault_within(2.5, stale + belt_period + 0.15), c.fault_during(3.7, 5.0),
+         c.hub_reason(3.7, 5.0, "no camera frames"), c.counter("end_session_refused", lambda n: n == 1, "== 1")],
+        [Fault("user_stop_unpaired", 2.5, 99.0)], fault,
     ))  # fmt: skip
     s.append(Scenario(
         "garbage_frames", "Pole ahead; the phone interleaves malformed packets and broken JPEGs.", 5.0,

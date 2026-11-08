@@ -37,6 +37,7 @@ from haptic_hub.control import (
     BELT_TEST_REASON,
     PAUSED_REASON,
     RESUME_REASON,
+    STOPPED_REASON,
     Control,
     belt_link_reason,
     ws_logger,
@@ -96,7 +97,7 @@ def describe_source(name: str, frame_source: str | None = None) -> dict[str, Any
 
 
 def banner(status: dict[str, Any]) -> dict[str, str]:
-    """The one-line verdict at the top of the page: level ok | paused | test | fault."""
+    """The one-line verdict at the top of the page: level ok | paused | stopped | test | fault."""
     reason, paused, belt = status.get("reason"), status.get("paused", False), status.get("belt", "")
     if reason == BELT_TEST_REASON:
         return {"level": "test", "title": "Belt test running", "detail": "Motors sweep left to right. These vibrations are not obstacles."}
@@ -106,6 +107,13 @@ def banner(status: dict[str, Any]) -> dict[str, str]:
             "title": "Alerts paused",
             "detail": "The belt played the pause cue and gives a short reminder pulse while paused. "
             "Silence does not mean the path is clear.",
+        }
+    if reason == STOPPED_REASON:
+        return {
+            "level": "stopped",
+            "title": "Stopped by wearer",
+            "detail": "The wearer pressed Stop. The belt played the session-ended cue and is quiet: no obstacle "
+            "alerts until the phone starts again. Silence does not mean the path is clear.",
         }
     if reason == RESUME_REASON:
         return {"level": "test", "title": "Resuming alerts", "detail": "The belt plays the resume cue. These vibrations are not obstacles."}
