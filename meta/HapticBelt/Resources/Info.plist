@@ -73,6 +73,8 @@
 	<string>Connects to your Meta AI glasses to read the camera.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>Connects to your Meta AI glasses to read the camera.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Campus route (experimental) uses your location and compass to speak walking directions. Location stays on the phone and isn't recorded.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connects to your glasses over Wi-Fi and sends camera frames to the hub laptop on your network.</string>
 	<key>NSBonjourServices</key>

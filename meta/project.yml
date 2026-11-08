@@ -36,6 +36,8 @@ targets:
     platform: iOS
     # Hostless: compiles the SDK-free protocol files directly (no app, no Meta SDK).
     sources:
+      - path: HapticBelt/Navigation/RouteGuidance.swift
+      - path: HapticBelt/Navigation/SimulatedWalk.swift
       - path: HapticBeltTests
       - path: HapticBelt/Hub/FramePacket.swift
       - path: HapticBelt/Hub/HubMessages.swift

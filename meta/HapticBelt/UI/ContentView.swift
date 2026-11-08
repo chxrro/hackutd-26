@@ -16,6 +16,11 @@ struct ContentView: View {
         HubSection(model: model)
         BeltSection(model: model)
         Section {
+          NavigationLink("Campus route (experimental)") { CampusRouteView(app: model) }
+        } footer: {
+          Text("Spoken directions ECSW ↔ Comets LANding. Supervised demo only.")
+        }
+        Section {
           Text("Experimental prototype. Silence does not mean the path is clear.")
             .font(.footnote)
             .foregroundStyle(.secondary)

@@ -114,11 +114,71 @@ HapticBelt/
   Forwarding/   FrameForwarder: newest-frame-wins, JPEG encode, send
   Hub/          HubClient (WebSocket, auto-reconnect), FramePacket, HubMessages, HubAddress
   UI/           ContentView: glasses / hub / belt sections
+  Navigation/   experimental campus route: RouteGuidance (pure), CampusNavigator, CampusRouteView, route GeoJSON
   Resources/    Info.plist (MWDAT keys), entitlements
-HapticBeltTests/ protocol golden-vector tests (no SDK, no device needed)
+HapticBeltTests/ protocol golden-vector + route guidance tests (no SDK, no device needed)
 project.yml      XcodeGen spec (the .xcodeproj is generated, not committed)
 Config/          Base.xcconfig + your gitignored Local.xcconfig
 ```
+
+## Campus route (experimental)
+
+Spoken walking directions on a fixed campus route: **ECSW ↔ Comets LANding**
+(the esports center in the Student Union). Open it from **Campus route
+(experimental)** at the bottom of the main screen. Design and reasoning:
+[docs/navigation-research.md §11](../docs/navigation-research.md).
+
+> Supervised demo only. Walk with a sighted guide. Directions say where the
+> route goes, not whether it's clear. Route speech goes quiet whenever the hub
+> reports an obstacle, a fault or an unhealthy state. When no hub is connected,
+> the screen says in red that obstacle alerts are **not** running.
+
+- **Route:** `HapticBelt/Navigation/ecsw-to-comets-landing.geojson`, from
+  OpenStreetMap (ODbL), about 320 m, **not yet walked**. To use UTD's map data
+  instead, replace the GeoJSON LineString (`[lon, lat]` order). Optional
+  properties: `name`, `destination`, `attribution`. The reverse route is
+  generated.
+- **Facing from:** *Compass* means the phone is held flat with its top
+  pointing where you face. *Walking* means the GPS direction of travel, which
+  needs a few steady steps (phone in a pocket or on a lanyard). *Auto* uses the
+  compass when its accuracy is ≤ 35°, otherwise walking.
+- **Phrases** all start with "Route:", for example "Route: bear left, 120
+  metres to Comets LANding." The phone never vibrates for route directions; in
+  this app vibration means obstacles.
+- **No direction** is given when GPS is worse than ±25 m, the fix is older
+  than 5 s, or the facing direction is unknown. The screen shows the reason.
+- **Simulate the walk:** a pretend walker that starts facing away, wanders off
+  the path once, and arrives. Labelled SIMULATED on screen. Use it in the
+  Simulator or as a video fallback, never as evidence of a real walk.
+- **Add 40 m straight test from here:** a straight route from where you stand,
+  in the direction the phone faces. Use it for a quick outdoor check anywhere.
+  The first tap warms up GPS and the compass. Tap again a few seconds later.
+- **Privacy:** location is used in memory only. It isn't logged, saved or sent
+  to the hub. iOS asks for when-in-use location permission the first time.
+
+**Checks**
+
+```bash
+xcodegen generate
+xcodebuild test -project HapticBelt.xcodeproj -scheme HapticBelt \
+  -destination 'platform=iOS Simulator,name=iPhone 16' -only-testing:HapticBeltTests
+```
+
+`RouteGuidanceTests` runs the route logic hostless, including a simulated walk
+of the real route in both directions.
+
+**First real test (people, not agents)**
+
+1. Outdoors near ECSW. Use **Add 40 m straight test from here**: face along
+   it, then sideways, then backwards. Check that you hear straight on, turn
+   left or right, and turn around.
+2. Start the hub and connect the phone, glasses camera running. Walk ECSW →
+   Comets LANding with a sighted guide, phone held flat, wearer **not**
+   blindfolded. Note where GPS drops above ±25 m (near buildings) and where
+   the doors really are.
+3. Have someone step in front of the camera mid-route. Route speech should
+   stop at once and resume about 2.5 s after the alert clears.
+4. Only then: the same walk for the video, guide alongside.
 
 ## Requirements
 
