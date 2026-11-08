@@ -20,6 +20,22 @@ enum AlertRange: String, Codable, CaseIterable, Sendable {
   case near, normal, far
 }
 
+/// `phone_status.frame_source` (docs/protocol.md section 1): where the frames on
+/// this connection come from, so the hub never shows simulated input as the glasses.
+enum HubFrameSource: String, Codable, CaseIterable, Sendable {
+  case glasses
+  /// Debug-only MockDeviceKit glasses: not the Ray-Bans.
+  case mock
+  case testPattern = "test_pattern"
+
+  init(source: FrameSource, mockGlasses: Bool) {
+    switch source {
+    case .test: self = .testPattern
+    case .glasses: self = mockGlasses ? .mock : .glasses
+    }
+  }
+}
+
 /// The hub's full settings, as sent in `ack.settings` and `status.settings`.
 /// Values the app doesn't recognize are kept as raw strings.
 struct HubSettings: Decodable, Equatable, Sendable {
@@ -235,6 +251,12 @@ enum HubOutgoing {
   private struct PhoneStatus: Encodable {
     let type = "phone_status"
     let stream: String
+    let frameSource: HubFrameSource?
+
+    enum CodingKeys: String, CodingKey {
+      case type, stream
+      case frameSource = "frame_source"
+    }
   }
 
   private struct Control: Encodable {
@@ -246,7 +268,10 @@ enum HubOutgoing {
 
   /// `control_code` is omitted when nil: the hub then accepts frames but refuses control.
   static func hello(controlCode: String? = nil) -> String { json(Hello(controlCode: controlCode)) }
-  static func phoneStatus(stream: String) -> String { json(PhoneStatus(stream: stream)) }
+  /// `frame_source` is omitted when nil; the hub then treats the frames as "unknown".
+  static func phoneStatus(stream: String, frameSource: HubFrameSource? = nil) -> String {
+    json(PhoneStatus(stream: stream, frameSource: frameSource))
+  }
 
   static func control(id: Int, _ action: ControlAction) -> String {
     var settings: SettingsChange?

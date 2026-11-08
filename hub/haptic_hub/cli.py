@@ -10,6 +10,7 @@
   haptic-hub run --source webcam --belt sim --dashboard   operator dashboard on http://127.0.0.1:8780/
   haptic-hub nim-bench --image photo.jpg measure cloud classifier round trips
   haptic-hub belt-test                   buzz each motor in order
+  haptic-hub bench                       hardware-day belt checks with pass/fail + JSON report (--belt sim to dry-run)
   haptic-hub scan                        look for the belt over BLE
 """
 
@@ -375,6 +376,10 @@ def main() -> None:
     bench.add_argument("--device", help="torch device for the detector")
     _add_classifier_args(bench, backend=False)
 
+    from haptic_hub.bench.cli import add_bench_parser, bench_command
+
+    add_bench_parser(sub)
+
     args = parser.parse_args()
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -387,11 +392,13 @@ def main() -> None:
 
     from haptic_hub.app import UserQuit
 
-    commands = {"run": _run, "belt-test": _belt_test, "scan": _scan, "nim-bench": _nim_bench}
+    commands = {"run": _run, "belt-test": _belt_test, "scan": _scan, "nim-bench": _nim_bench, "bench": bench_command}
     try:
-        asyncio.run(commands[args.command](args))
+        code = asyncio.run(commands[args.command](args))
     except (KeyboardInterrupt, UserQuit):
-        pass
+        code = 130 if args.command == "bench" else None  # bench has already written its report
+    if isinstance(code, int) and code:
+        raise SystemExit(code)
 
 
 if __name__ == "__main__":

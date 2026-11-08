@@ -3,8 +3,8 @@
 //
 // WebSocket connection to the hub laptop (docs/protocol.md section 1).
 // Reconnects automatically while a URL is set, and re-sends `hello` (with the
-// control code) and the last `phone_status` after every reconnect. Knows
-// nothing about the glasses. Based on meta/HapticBelt/Hub/HubClient.swift.
+// control code) and the last `phone_status` (with its `frame_source`) after
+// every reconnect, before any frame. Knows nothing about the glasses. Based on meta/HapticBelt/Hub/HubClient.swift.
 //
 
 import Foundation
@@ -34,6 +34,7 @@ actor HubClient {
   private var controlCode: String?
   /// Bumped whenever the socket is replaced, so callbacks from an old socket are ignored.
   private var generation = 0
+  /// The last `phone_status` message as sent, re-sent after a reconnect.
   private var lastPhoneStatus: String?
   private(set) var state: State = .disconnected {
     didSet { if state != oldValue { continuation.yield(.state(state)) } }
@@ -76,10 +77,12 @@ actor HubClient {
     }
   }
 
-  /// Tells the hub what the glasses stream is doing. Re-sent after every reconnect.
-  func reportPhoneStatus(stream: String) async {
-    lastPhoneStatus = stream
-    _ = await sendText(HubOutgoing.phoneStatus(stream: stream))
+  /// Tells the hub what the stream is doing and where its frames come from.
+  /// Re-sent after every reconnect.
+  func reportPhoneStatus(stream: String, frameSource: HubFrameSource?) async {
+    let text = HubOutgoing.phoneStatus(stream: stream, frameSource: frameSource)
+    lastPhoneStatus = text
+    _ = await sendText(text)
   }
 
   /// Sends one control request. Returns false if it couldn't be sent. The reply
@@ -118,10 +121,13 @@ actor HubClient {
       // The first successful send is our "connected" signal.
       try await task.send(.string(HubOutgoing.hello(controlCode: controlCode)))
       guard gen == generation else { return }
-      state = .connected
+      // Before `.connected`, so no frame can overtake it: the hub labels frames
+      // from a connection without a frame_source as "unknown".
       if let lastPhoneStatus {
-        _ = await sendText(HubOutgoing.phoneStatus(stream: lastPhoneStatus))
+        try await task.send(.string(lastPhoneStatus))
+        guard gen == generation else { return }
       }
+      state = .connected
       await receiveLoop(task, gen)
     } catch {
       fail(error, gen)

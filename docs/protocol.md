@@ -43,10 +43,34 @@ Golden vector (seq=1, capture_ms=1700000000000, 504×896, jpeg=`ff d8 ff d9`):
 ```json
 {"type": "hello", "client": "ios", "version": 1}
 {"type": "phone_status", "stream": "streaming"}
+{"type": "phone_status", "stream": "streaming", "frame_source": "mock"}
 ```
 
 `stream` is the glasses stream state as the app sees it (`stopped`,
 `waitingForDevice`, `starting`, `streaming`, `paused`, `stopping`).
+
+`frame_source` (optional, additive 2026-11-08) says where the frames on this
+connection come from:
+
+| Value          | Meaning |
+|----------------|---------|
+| `glasses`      | The real glasses camera. |
+| `mock`         | Simulated glasses on the phone (Debug builds, Meta MockDeviceKit). Not the real glasses. |
+| `test_pattern` | A generated test picture. Not a camera. |
+
+The phone sends it on every `phone_status` (a run starts with `starting`, so
+the hub knows the source before the first frame) and re-sends the last
+`phone_status` after a reconnect, before any frames. It is not on `hello`:
+`hello` goes out at connect time, before a run has picked a source.
+
+The hub treats a missing field, an unrecognized value, or a connection that
+hasn't sent `phone_status` yet as `"unknown"`, **never** as `"glasses"`. Each
+`phone_status` replaces the previous declaration for that connection, so a
+`phone_status` without the field resets it to `"unknown"`. Frames are
+attributed to the source their connection last declared. Only `glasses` may be
+presented as real glasses input; the hub labels everything else as simulated
+or unknown in its status, logs, dashboard and recordings. The field doesn't
+change the belt output.
 
 ## 2. Hub → phone: status (WebSocket, text JSON, ~5 Hz)
 
@@ -59,7 +83,8 @@ Golden vector (seq=1, capture_ms=1700000000000, 504×896, jpeg=`ff d8 ff d9`):
   "levels": [0, 0, 140, 0, 0],
   "belt": "connected",
   "inference_ms": 85.2,
-  "frame_age_ms": 40.1
+  "frame_age_ms": 40.1,
+  "frame_source": "glasses"
 }
 ```
 
@@ -67,6 +92,12 @@ Golden vector (seq=1, capture_ms=1700000000000, 504×896, jpeg=`ff d8 ff d9`):
 - `healthy: false` means the hub can't vouch for the output. `reason` says why,
   e.g. `"no camera frames for 1.2 s"`.
 - `belt`: `connected` | `connecting` | `disconnected` | `simulated`.
+- `frame_source` (optional, additive 2026-11-08): only when the hub's source
+  is the phone. The `frame_source` declared by the connection that sent the
+  newest frame (or the newest `phone_status`, before any frame):
+  `glasses` | `mock` | `test_pattern` | `unknown`. Treat anything other than
+  `glasses` as not the real glasses. Absent with other hub sources (webcam,
+  video, replay); `source` names those.
 - Belt reasons (changed 2026-11-08, hub only): `"belt disconnected"` and
   `"belt connecting"` now set `healthy: false` whether or not alerts are paused
   (before, an unpaused hub said `healthy: true` with `belt: "disconnected"`).

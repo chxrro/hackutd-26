@@ -145,6 +145,12 @@ class Hub:
             if self.viewer is not None:
                 self.viewer.latency_line = summary.short()
 
+    def _frame_source_field(self) -> dict[str, str]:
+        """Only for the phone source (docs/protocol.md section 2). Display only:
+        the belt output doesn't depend on it."""
+        value = getattr(self.source, "frame_source", None)
+        return {"frame_source": value} if isinstance(value, str) else {}
+
     def status(self) -> dict[str, Any]:
         now = time.monotonic()
         age = self.safety.frame_age(now)
@@ -158,5 +164,6 @@ class Hub:
             "source": self.source.name,
             "inference_ms": round(self.result.inference_ms, 1) if self.result else None,
             "frame_age_ms": round(age * 1000, 1) if age is not None else None,
+            **self._frame_source_field(),
             **self.control.status_fields(self.result, self.health, self.cfg.perception.sectors),
         }

@@ -86,7 +86,9 @@ final class AppModel: ObservableObject {
         let forwarder = forwarder
         let client = hub.client
         bridge.onFrame = { image in forwarder.submit(image) }
-        bridge.onStreamState = { state in Task { await client.reportPhoneStatus(stream: state) } }
+        bridge.onStreamState = { state, frameSource in
+            Task { await client.reportPhoneStatus(stream: state, frameSource: frameSource) }
+        }
         if let pairing { hub.connect(pairing) }
 
         ticker = Task { [weak self] in
