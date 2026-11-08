@@ -112,6 +112,9 @@ class HapticsConfig:
     deadband: float = 0.12  # risks below this are not felt
     min_level: int = 90  # weakest PWM that reliably spins a coin motor
     max_level: int = 255
+    # While alerts are paused: one low pulse on the outer motors this often, so the
+    # paused state is never silent for long (cues.py). 0 = off, else >= 2 s.
+    pause_reminder_s: float = 15.0
 
 
 @dataclass

@@ -115,7 +115,7 @@ def test_ws_streams_state_and_preview_and_takes_control():
     assert state["options"]["alert_ranges"]["normal"] == {"far_m": 2.5, "ttc_far_s": 3.0}
     assert state["options"]["belt_test_s"] <= 3.0
     assert ack == {"type": "ack", "id": 5, "ok": True, "error": None, "settings": {**ack["settings"], "paused": True}}
-    assert paused["banner"]["level"] == "paused" and paused["status"]["mode"] == "off"
+    assert paused["banner"]["level"] == "paused" and paused["status"]["mode"] in ("off", "levels")  # quiet or pause cue
 
 
 def test_ws_refuses_cross_site_origin():
@@ -160,6 +160,8 @@ def test_preview_without_result_is_the_raw_frame():
         ({"reason": "belt test", "paused": False, "belt": "simulated"}, "test", "Belt test running"),
         ({"reason": "no camera frames for 1.2 s", "paused": False, "belt": "connected"}, "fault", "FAULT: no camera frames for 1.2 s"),
         ({"reason": "no camera frames for 1.2 s", "paused": True, "belt": "connected"}, "fault", "FAULT: no camera frames for 1.2 s"),
+        ({"reason": "belt disconnected", "paused": True, "belt": "disconnected"}, "fault", "FAULT: belt disconnected"),
+        ({"reason": "resuming alerts", "paused": False, "belt": "connected"}, "test", "Resuming alerts"),
         ({"reason": None, "paused": False, "belt": "disconnected"}, "fault", "FAULT: belt disconnected"),
     ],
 )

@@ -3,15 +3,17 @@ the hub runs (docs/protocol.md, "Control").
 
 One Control object owns the settings and is the only place they change:
 
-  paused       belt gets ``off``; status says ``healthy: false, reason: "alerts paused"``
+  paused       belt plays the pause cue, then a low reminder pulse every 15 s;
+               status says ``healthy: false, reason: "alerts paused"``. Resuming
+               plays the resume cue (cues.py).
   belt_test    a bounded left-to-right sweep (<= 3 s), refused while paused
   alert_range  presets for how early alerts start (far_m / ttc_far_s)
   classifier   swap the cloud person/object backend in ClassifiedPerception
   record       stub until session recording lands
 
-Hardware and input faults always win over pause in the status ``reason``, so a
-paused hub never hides "no camera frames". Pausing is explicit and announced; it
-is never a silent clear-path signal.
+Hardware and input faults always win over pause, on the belt (fault pattern) and
+in the status ``reason``, so a paused hub never hides "no camera frames". Pausing
+is explicit and felt; it is never a silent clear-path signal.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from haptic_hub import cues
 from haptic_hub.config import HubConfig, PerceptionConfig
 from haptic_hub.perception.classify import ClassifiedPerception
 from haptic_hub.perception.geometry import box_sectors
@@ -37,6 +40,7 @@ log = logging.getLogger(__name__)
 
 PAUSED_REASON = "alerts paused"
 BELT_TEST_REASON = "belt test"
+RESUME_REASON = "resuming alerts"
 NOT_PAIRED = "not paired"
 
 
@@ -102,6 +106,7 @@ class Control:
         it only when the hub was started with a cloud endpoint configured. It may block
         on the network, so it runs in a worker thread."""
         self.cfg = cfg
+        cues.check_reminder_s(cfg.haptics.pause_reminder_s)
         self.classified = perception if isinstance(perception, ClassifiedPerception) else None
         self._cloud_factory = cloud_factory
         self.code = code or new_control_code()
@@ -110,6 +115,10 @@ class Control:
         self.record = False
         self.alert_range = self._matching_range()
         self._test_started: float | None = None
+        # Cue timelines start on the belt loop's clock, at the first tick that can play them.
+        self._pause_started: float | None = None  # this quiet paused stretch (cue, then reminders)
+        self._resume_pending = False
+        self._resume_started: float | None = None
         self.belt_state: str | None = None  # kept current by the hub's belt loop
         self._lock = asyncio.Lock()
         self._paired: weakref.WeakSet[Any] = weakref.WeakSet()
@@ -161,11 +170,13 @@ class Control:
         if action == "pause":
             if not self.paused:
                 log.info("control: alerts paused")
+                self._pause_started, self._resume_pending = None, False
             self.paused, self._test_started = True, None
             return None
         if action == "resume":
             if self.paused:
                 log.info("control: alerts resumed")
+                self._resume_pending, self._resume_started = True, None
             self.paused = False
             return None
         if action == "belt_test":
@@ -293,12 +304,34 @@ class Control:
         """The policy's command and the safety verdict -> what the belt actually gets,
         and the status reason (None = healthy)."""
         self.belt_state = belt_state
-        motors = len(cmd.levels)
-        if (test := self._belt_test_command(now, motors, cmd.ttl_ms)) is not None:
+        motors, ttl = len(cmd.levels), cmd.ttl_ms
+        if (test := self._belt_test_command(now, motors, ttl)) is not None:
+            self._resume_started = None  # a pending resume cue plays after the test
             return test, BELT_TEST_REASON  # these vibrations are not obstacles
+        link = belt_link_reason(belt_state)
         if self.paused:
-            # The belt stays off, but a real fault is what the status reports.
-            return BeltCommand.off(motors, cmd.ttl_ms), health.reason or belt_link_reason(belt_state) or PAUSED_REASON
+            if not health.ok:
+                # A real fault wins over pause: the policy's fault pattern goes out.
+                # The pause cue plays again once the fault clears, so the wearer
+                # knows the silence that follows is the pause, not "fault over".
+                self._pause_started = None
+                return BeltCommand.fault(motors, ttl), health.reason
+            if link is not None:  # the belt can't hear us; its firmware plays the fault itself
+                self._pause_started = None
+                return BeltCommand.off(motors, ttl), link
+            if self._pause_started is None:
+                self._pause_started = now
+            levels = cues.paused_levels(now - self._pause_started, motors, self.cfg.haptics.pause_reminder_s)
+            return _levels(levels, ttl), PAUSED_REASON
+        if self._resume_pending:
+            if not health.ok or link is not None:
+                self._resume_started = None  # faults win; the resume cue waits until the belt can play it
+                return cmd, health.reason
+            if self._resume_started is None:
+                self._resume_started = now
+            if (levels := cues.play(cues.resume_cue(motors), now - self._resume_started)) is not None:
+                return _levels(levels, ttl), RESUME_REASON  # these vibrations are not obstacles
+            self._resume_pending, self._resume_started = False, None
         return cmd, health.reason
 
     # -- status ------------------------------------------------------------
@@ -311,6 +344,10 @@ class Control:
             "settings": self.settings(),
             "sectors": [{"kind": k} for k in sector_kinds(result if fresh else None, motors, self.cfg.perception.min_box_height)],
         }
+
+
+def _levels(levels: tuple[int, ...], ttl_ms: int) -> BeltCommand:
+    return BeltCommand(BeltMode.LEVELS if any(levels) else BeltMode.OFF, levels, ttl_ms)
 
 
 def sector_kinds(result: PerceptionResult | None, motors: int, min_box_height: float = 0.0) -> list[str | None]:

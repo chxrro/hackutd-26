@@ -24,6 +24,7 @@ haptic_hub/
     openvocab.py       detector that finds hazards by text prompt (--detector openvocab)
   haptics.py         risk -> motor levels (instant rise, slow fade, deadband)
   safety.py          when to send the fault pattern instead of levels
+  cues.py            pause / resume belt cues and the paused reminder (docs/protocol.md "Belt cues")
   control.py         runtime settings for the phone / dashboard: pause, belt test,
                      alert range, classifier; pairing code (docs/protocol.md "Control")
   belt/              where commands go
@@ -88,7 +89,9 @@ macOS asks for Bluetooth permission (for BLE) and camera permission (for
 Live sources (`webcam`, `stream`) reconnect on their own if the feed drops.
 While the feed is down the belt plays the fault pattern. Files play at their
 own frame rate and loop. With `--belt sim` the terminal shows the belt, e.g.
-`belt LEVELS [ ▃█▃ ]`.
+`belt LEVELS [ ▃█▃ ]`. It logs a change at most every 0.5 s; add
+`--sim-log-interval 0` to see every change, e.g. the 0.15 s steps of the pause
+and resume cues.
 
 ## Dashboard and remote control
 
@@ -125,7 +128,7 @@ servers don't log message payloads.
 
 | Control | Effect |
 |---|---|
-| pause / resume | Belt gets `off`. Status: `healthy: false`, `reason: "alerts paused"`. A camera, perception or belt fault still shows as the reason while paused. |
+| pause / resume | Pause: the belt plays the pause cue (outside in, 0.6 s), then one low pulse on the outer motors every 15 s (`--pause-reminder SECONDS`, `0` = off). Status: `healthy: false`, `reason: "alerts paused"`. Resume: the resume cue (inside out, 0.6 s, `reason: "resuming alerts"`), then normal alerts. A camera or perception fault still plays the fault pattern while paused and shows as the reason. See `docs/protocol.md`, "Belt cues". |
 | belt test | Each motor in turn, left to right, 0.4 s each (2 s for 5 motors, never over 3 s). Refused while paused. Status reason `"belt test"`. Real alerts are replaced by the sweep for those ≤ 3 s, so don't run it on a walk. |
 | classifier | `local` ⇄ `nim` at runtime. `nim` is only allowed if the hub started with a cloud endpoint (`--classifier nim`, `--nim-url`, `--nim-env`, or `NIM_BASE_URL` / `NIM_API_KEY` / `NVIDIA_API_KEY`). Each switch to `nim` probes the endpoint again; if that fails, nothing changes. |
 | alert range | Presets for where alerts start (below). |
