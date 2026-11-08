@@ -27,6 +27,9 @@
 		A00000000000000000000028 /* WearerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000028 /* WearerView.swift */; };
 		A00000000000000000000029 /* HelperView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000029 /* HelperView.swift */; };
 		A00000000000000000000030 /* AdvancedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000030 /* AdvancedView.swift */; };
+		A00000000000000000000034 /* CameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000034 /* CameraPreviewView.swift */; };
+		A00000000000000000000035 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000035 /* Assets.xcassets */; };
+		A00000000000000000000036 /* LocationLookup.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000036 /* LocationLookup.swift */; };
 		A00000000000000000000065 /* ProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000031 /* ProtocolTests.swift */; };
 		A00000000000000000000066 /* PairingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000032 /* PairingTests.swift */; };
 		A00000000000000000000067 /* WearerStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000033 /* WearerStatusTests.swift */; };
@@ -64,6 +67,9 @@
 		B00000000000000000000028 /* WearerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WearerView.swift; sourceTree = "<group>"; };
 		B00000000000000000000029 /* HelperView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperView.swift; sourceTree = "<group>"; };
 		B00000000000000000000030 /* AdvancedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdvancedView.swift; sourceTree = "<group>"; };
+		B00000000000000000000034 /* CameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPreviewView.swift; sourceTree = "<group>"; };
+		B00000000000000000000035 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		B00000000000000000000036 /* LocationLookup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationLookup.swift; sourceTree = "<group>"; };
 		B00000000000000000000031 /* ProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolTests.swift; sourceTree = "<group>"; };
 		B00000000000000000000032 /* PairingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingTests.swift; sourceTree = "<group>"; };
 		B00000000000000000000033 /* WearerStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WearerStatusTests.swift; sourceTree = "<group>"; };
@@ -100,6 +106,7 @@
 				B00000000000000000000003 /* FrameUploader.swift */,
 				B00000000000000000000004 /* GlassesCamera.swift */,
 				B00000000000000000000008 /* MockGlasses.swift */,
+				B00000000000000000000035 /* Assets.xcassets */,
 				B00000000000000000000005 /* Info.plist */,
 				B00000000000000000000007 /* Signing.xcconfig */,
 				D00000000000000000000013 /* App */,
@@ -125,6 +132,7 @@
 			children = (
 				B00000000000000000000026 /* AppModel.swift */,
 				B00000000000000000000027 /* PairingStore.swift */,
+				B00000000000000000000036 /* LocationLookup.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -158,6 +166,7 @@
 				B00000000000000000000028 /* WearerView.swift */,
 				B00000000000000000000029 /* HelperView.swift */,
 				B00000000000000000000030 /* AdvancedView.swift */,
+				B00000000000000000000034 /* CameraPreviewView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -181,6 +190,7 @@
 			buildPhases = (
 				C00000000000000000000002 /* Sources */,
 				C00000000000000000000001 /* Frameworks */,
+				C00000000000000000000003 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -243,6 +253,17 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		C00000000000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A00000000000000000000035 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		C00000000000000000000002 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -264,9 +285,11 @@
 				A00000000000000000000025 /* Announcements.swift in Sources */,
 				A00000000000000000000026 /* AppModel.swift in Sources */,
 				A00000000000000000000027 /* PairingStore.swift in Sources */,
+				A00000000000000000000036 /* LocationLookup.swift in Sources */,
 				A00000000000000000000028 /* WearerView.swift in Sources */,
 				A00000000000000000000029 /* HelperView.swift in Sources */,
 				A00000000000000000000030 /* AdvancedView.swift in Sources */,
+				A00000000000000000000034 /* CameraPreviewView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -316,6 +339,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = B00000000000000000000007 /* Signing.xcconfig */;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 
@@ -337,6 +361,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = B00000000000000000000007 /* Signing.xcconfig */;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 

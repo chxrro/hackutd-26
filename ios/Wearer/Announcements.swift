@@ -15,6 +15,7 @@ import Foundation
 struct Announcement: Equatable, Sendable {
   var key: String
   var text: String
+  var urgent = false
 }
 
 /// De-duplication and rate limiting for state announcements.
@@ -79,29 +80,63 @@ enum SectorSpeech {
   /// person/object label, or nil. Sectors without a vibrating motor are not
   /// spoken: this follows the belt, it doesn't narrate the scene.
   static func phrase(for status: HubStatus) -> Announcement? {
+    guard status.healthy, status.mode == "levels", !status.isPaused, !status.isBeltTest, status.stopped != true else { return nil }
+    if status.hasSpokenObstacleStatus {
+      guard let obstacle = status.spokenObstacle,
+        status.levels.indices.contains(obstacle.sector), status.levels[obstacle.sector] > 0 else { return nil }
+      return obstaclePhrase(obstacle, sectorCount: status.levels.count)
+    }
     guard let sectors = status.sectors, sectors.count == status.levels.count else { return nil }
     var best: (index: Int, level: Int, kind: String)?
     for (index, sector) in sectors.enumerated() {
       let level = status.levels[index]
-      guard level > 0, let kind = sector.kind, kind == "person" || kind == "object" else { continue }
+      guard level > 0, !sector.uncertain, let kind = sector.kind, kind == "person" || kind == "object" else { continue }
       if best == nil || level > best!.level { best = (index, level, kind) }
     }
     guard let best, let direction = direction(index: best.index, count: sectors.count) else { return nil }
     let noun = best.kind == "person" ? "Person" : "Object"
     return Announcement(key: "\(best.kind):\(direction)", text: "\(noun) \(direction)")
   }
+
+  private static func obstaclePhrase(_ obstacle: HubStatus.SpokenObstacle, sectorCount: Int) -> Announcement? {
+    let noun: String
+    switch obstacle.kind {
+    case "person": noun = "Person"
+    case "object": noun = "Object"
+    case "obstacle": noun = "Obstacle"
+    default: return nil
+    }
+    guard let direction = direction(index: obstacle.sector, count: sectorCount) else { return nil }
+    let distance = obstacle.distanceMeters.flatMap { meters -> String? in
+      guard meters > 0, meters < 20 else { return nil }
+      let feet = meters / 0.3048
+      if feet < 1 { return "less than a foot away" }
+      let rounded = Int(feet.rounded())
+      return "about \(rounded) \(rounded == 1 ? "foot" : "feet") away"
+    }
+    let details = [distance, obstacle.closing ? "getting closer" : nil].compactMap { $0 }
+    guard !details.isEmpty else { return nil }
+    let description = details.joined(separator: " and ")
+    let urgent = obstacle.urgent == true
+    let key = "\(obstacle.kind):\(direction)" + (urgent ? ":urgent" : "")
+    let prefix = urgent ? "Caution. " : ""
+    return Announcement(key: key, text: "\(prefix)\(noun) \(direction), \(description).", urgent: urgent)
+  }
 }
 
 /// Limits for the optional obstacle-kind speech.
 struct SectorSpeechGate: Sendable {
-  /// Between any two phrases.
+  /// Before another routine phrase.
   var minInterval: TimeInterval = 4
+  /// Between urgent phrases, even if the direction or label changes.
+  var urgentInterval: TimeInterval = 2
   /// Before the same phrase is repeated.
   var repeatInterval: TimeInterval = 15
   /// Quiet time after a state announcement, so the two don't talk over each other.
   var quietAfterState: TimeInterval = 2
 
   private(set) var lastAt: TimeInterval?
+  private(set) var lastUrgentAt: TimeInterval?
   private(set) var lastSaid: [String: TimeInterval] = [:]
   private(set) var stateAt: TimeInterval?
 
@@ -109,9 +144,14 @@ struct SectorSpeechGate: Sendable {
 
   mutating func submit(_ phrase: Announcement, now: TimeInterval) -> Announcement? {
     if let stateAt, now - stateAt < quietAfterState { return nil }
-    if let lastAt, now - lastAt < minInterval { return nil }
+    if phrase.urgent {
+      if let lastUrgentAt, now - lastUrgentAt < urgentInterval { return nil }
+    } else if let lastAt, now - lastAt < minInterval {
+      return nil
+    }
     if let said = lastSaid[phrase.key], now - said < repeatInterval { return nil }
     lastAt = now
+    if phrase.urgent { lastUrgentAt = now }
     lastSaid[phrase.key] = now
     lastSaid = lastSaid.filter { now - $0.value < repeatInterval }
     return phrase

@@ -82,6 +82,9 @@ async def _run(args: argparse.Namespace) -> None:
     if args.device:
         cfg.perception.device = args.device
     cfg.perception.detector = args.detector
+    cfg.perception.depth_geometry = args.depth_geometry
+    if args.hfov is not None:
+        cfg.perception.hfov_deg = args.hfov
     if args.prompts:
         if args.detector != "openvocab":
             raise SystemExit("--prompts needs --detector openvocab")
@@ -350,6 +353,13 @@ def main() -> None:
     run.add_argument("--port", type=int, default=8765, help="WebSocket port for the phone")
     run.add_argument("--device", help="torch device: mps, cuda or cpu (default: auto)")
     run.add_argument("--outdoor", action="store_true", help="use the outdoor metric depth model")
+    run.add_argument(
+        "--depth-geometry",
+        default="floor",
+        choices=["floor", "band"],
+        help="floor = obstacles are depth points above a fitted floor plane (default); band = fixed image rows (old)",
+    )
+    run.add_argument("--hfov", type=float, help="camera horizontal field of view in degrees (default 60, assumed, unmeasured)")
     run.add_argument("--show", action="store_true", help="open a debug window")
     run.add_argument(
         "--detector",

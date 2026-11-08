@@ -32,6 +32,23 @@ final class WearerStatusTests: XCTestCase {
     XCTAssertTrue(unpaired.detail.contains("isn’t set up"))
   }
 
+  func testQuietBeltDuringHealthySessionIsNotAFault() {
+    let quiet = condition { $0.status = HubStatus(mode: "off") }
+    XCTAssertEqual(quiet.kind, .alertsOn)
+    XCTAssertTrue(quiet.detail.contains("Silence does not mean the path is clear"))
+  }
+
+  func testLocationSpeechWaitsForFreshQuietAlerts() {
+    let quiet = good { $0.status = HubStatus(mode: "off") }
+    let obstacle = good { $0.status = HubStatus(levels: [0, 0, 120, 0, 0]) }
+    let stale = good { $0.statusAge = 0.7 }
+    let fault = good { $0.status = HubStatus(mode: "fault", healthy: false) }
+    XCTAssertTrue(WearerStatus.permitsLocationSpeech(quiet, condition: WearerStatus.condition(quiet), statusTimeout: 0.6))
+    for input in [obstacle, stale, fault] {
+      XCTAssertFalse(WearerStatus.permitsLocationSpeech(input, condition: WearerStatus.condition(input), statusTimeout: 0.6))
+    }
+  }
+
   func testStatusAppCantVouchForIsAWarning() {
     let cases: [(String, WearerCondition, WearerKind)] = [
       ("disconnected", condition { $0.link = .disconnected }, .hubDisconnected),
@@ -59,7 +76,7 @@ final class WearerStatusTests: XCTestCase {
        .beltTest),
       ("belt unknown", condition { $0.status = HubStatus(belt: "melted") }, .belt("melted")),
       ("fault mode while healthy", condition { $0.status = HubStatus(mode: "fault") }, .beltMode("fault")),
-      ("off mode while healthy", condition { $0.status = HubStatus(mode: "off") }, .beltMode("off")),
+      ("off mode with nonzero levels", condition { $0.status = HubStatus(mode: "off", levels: [0, 0, 90, 0, 0]) }, .beltMode("off")),
       ("no camera frames", condition { $0.cameraFrameAge = 2.5 }, .noCameraFrames),
       ("starting", condition { $0.session = .starting; $0.cameraFrameAge = nil }, .starting),
       ("test pattern", condition { $0.source = .test }, .simulated("test")),
@@ -539,6 +556,39 @@ final class WearerStatusTests: XCTestCase {
     XCTAssertNil(SectorSpeech.phrase(for: HubStatus(levels: [0, 90], sectors: sectors)))
   }
 
+  func testSpokenObstacleUsesApproximateFeetAndRelativeMotion() {
+    let obstacle = HubStatus.SpokenObstacle(sector: 2, kind: "person", distanceMeters: 2.4, closing: true)
+    let status = HubStatus(levels: [0, 0, 120, 0, 0], spokenObstacle: obstacle)
+    XCTAssertEqual(SectorSpeech.phrase(for: status)?.text, "Person ahead, about 8 feet away and getting closer.")
+    let nearby = HubStatus.SpokenObstacle(sector: 1, kind: "object", distanceMeters: 0.2, closing: false)
+    XCTAssertEqual(SectorSpeech.phrase(for: HubStatus(levels: [0, 120, 0, 0, 0], spokenObstacle: nearby))?.text,
+                   "Object left, less than a foot away.")
+    let unknown = HubStatus.SpokenObstacle(sector: 2, kind: "person", distanceMeters: .infinity, closing: true)
+    XCTAssertEqual(SectorSpeech.phrase(for: HubStatus(levels: [0, 0, 120, 0, 0], spokenObstacle: unknown))?.text,
+                   "Person ahead, getting closer.")
+    XCTAssertNil(SectorSpeech.phrase(for: HubStatus(healthy: false, levels: [0, 0, 120, 0, 0], spokenObstacle: obstacle)))
+    XCTAssertNil(SectorSpeech.phrase(for: HubStatus(levels: [0, 0, 120, 0, 0], paused: true, spokenObstacle: obstacle)))
+  }
+
+  func testNullSpokenObstacleSuppressesLegacySectorSpeech() throws {
+    let json = #"{"type":"status","mode":"levels","healthy":true,"levels":[120],"belt":"connected","sectors":[{"kind":"person"}]"#
+    let legacy = try XCTUnwrap(HubStatus.parse(json + "}"))
+    XCTAssertEqual(SectorSpeech.phrase(for: legacy)?.text, "Person ahead")
+    let decoded = try XCTUnwrap(HubStatus.parse(json + #", "spoken_obstacle":{"sector":0,"kind":"person","distance_m":2.4,"closing":true}}"#))
+    XCTAssertEqual(SectorSpeech.phrase(for: decoded)?.text, "Person ahead, about 8 feet away and getting closer.")
+    let current = try XCTUnwrap(HubStatus.parse(json + #", "spoken_obstacle":null}"#))
+    XCTAssertNil(SectorSpeech.phrase(for: current))
+  }
+
+  func testUncertainLegacyLabelIsSkippedAndDepthHazardStaysGeneric() throws {
+    let json = #"{"type":"status","mode":"levels","healthy":true,"levels":[120],"belt":"connected","sectors":[{"kind":"person","uncertain":true}]"#
+    let legacy = try XCTUnwrap(HubStatus.parse(json + "}"))
+    XCTAssertNil(SectorSpeech.phrase(for: legacy))
+    let status = try XCTUnwrap(HubStatus.parse(json + #", "spoken_obstacle":{"sector":0,"kind":"obstacle","distance_m":0.5,"closing":false,"urgent":true}}"#))
+    XCTAssertEqual(SectorSpeech.phrase(for: status),
+                   Announcement(key: "obstacle:ahead:urgent", text: "Caution. Obstacle ahead, about 2 feet away.", urgent: true))
+  }
+
   // MARK: Stop (end_session)
 
   private func stopped(_ stop: WearerStop?, hubStopped: Bool? = nil, edit: (inout WearerInputs) -> Void = { _ in })
@@ -652,5 +702,19 @@ final class WearerStatusTests: XCTestCase {
     gate.noteStateAnnouncement(now: 30)
     XCTAssertNil(gate.submit(object, now: 31))  // right after a state announcement
     XCTAssertEqual(gate.submit(object, now: 32), object)
+  }
+
+  func testUrgencyCanEscalateButStillRespectsFaultQuietTimeAndRepeatLimits() {
+    var gate = SectorSpeechGate()
+    let regular = Announcement(key: "person:ahead", text: "Person ahead")
+    let urgent = Announcement(key: "person:ahead:urgent", text: "Caution. Person ahead, getting closer.", urgent: true)
+    let other = Announcement(key: "object:left:urgent", text: "Caution. Object left.", urgent: true)
+    XCTAssertEqual(gate.submit(regular, now: 0), regular)
+    XCTAssertEqual(gate.submit(urgent, now: 1), urgent)
+    XCTAssertNil(gate.submit(other, now: 2))
+    XCTAssertNil(gate.submit(urgent, now: 8))
+    gate.noteStateAnnouncement(now: 10)
+    XCTAssertNil(gate.submit(other, now: 11))
+    XCTAssertEqual(gate.submit(other, now: 12), other)
   }
 }

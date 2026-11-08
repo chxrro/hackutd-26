@@ -37,6 +37,28 @@ Read the current tree before using this snapshot as a description of today's imp
 - With no phone hotspot available, Camera Bridge added an on-screen preview for Device Hub mirroring. The signed build ran on the iPhone 17, the simulated frame counter advanced in the Mac window over USB, and stopping cleared the preview. The physical Ray-Ban Meta Gen 2 session reported `Device unavailable` before the tester put on the glasses. When worn, the SDK reported that the app component on the glasses requires an update. The camera session did not produce frames in either attempt.
 - The handoff build adds an **Open glasses app update** shortcut to Meta AI. The unsigned iOS build passed in Xcode 27.2. The shortcut still needs a physical test, followed by a live preview after the glasses app update.
 
+## Camera preview UI experiment (2026-11-08)
+
+The local `codex/wearer-ui-preview` branch adds a Camera preview reachable from the wearer screen. It reuses the phone's existing camera session, supports a local-only preview, and leaves belt controls on the wearer screen. The camera card exposes its source and state to assistive technology. Start, Stop, Pause and Resume use the same visible and spoken labels and scale with Dynamic Type.
+
+The iPhone 17 simulator exposed the home and camera controls and pairing field names in its accessibility tree. A simulated test pattern played, cleared on **Stop preview**, and ended when returning to the home screen. The largest Dynamic Type size was checked in both screens. The 72 iOS tests passed. Physical VoiceOver navigation, live Ray-Ban video, and real belt use were not tested in this experiment.
+
+At the owner's request, **Start alerts** now fills most of the upper screen in the idle layout and is the first control in the main content. Warnings and active-session status keep their priority. An iPhone 17 simulator tap near the bottom-left corner of the button triggered the expected unpaired-hub announcement. All 72 iOS tests passed with this layout.
+
+The owner asked that the iOS app follow [Apple’s Accessibility HIG](https://developer.apple.com/design/human-interface-guidelines/accessibility). The branch adds native Voice Control names and a **Read belt status** action, separates setup labels from values, stacks setup rows at larger text sizes, and honors Dim Flashing Lights by hiding raw previews. In the iPhone 17 simulator, the status action logged the expected announcement, the labeled test feed played, and the wearer screen was inspected at maximum Dynamic Type with dark appearance and Increase Contrast. All 72 iOS tests passed. VoiceOver speech and gestures, Voice Control, Switch Control, Full Keyboard Access, and the Dim Flashing Lights setting still need checks on a physical iPhone. The simulator did not expose the Dim Flashing Lights switch.
+
+The owner asked for spoken obstacle alerts with distance and approach cues. **Speak obstacle alerts** uses the estimated distance and motion of the selected detection. The phrase describes a closing gap because camera motion alone cannot identify who is moving. With a synthetic person detection at 2.4 m and a closing track, the iPhone 17 simulator received status over the hub WebSocket and logged “Simulation. Person ahead, about 8 feet away and getting closer.” All 74 iOS tests passed. This check used a simulated belt and synthetic perception result. It did not measure distance accuracy or verify audible playback, physical glasses, or the belt. [Setup and checks](camera-bridge.md#spoken-obstacle-alerts)
+
+For peer review, the preview branch was checked against `origin/main` at `6c06adb`. The hub suite passed all 343 tests, and the unsigned arm64 iPhone release build succeeded. The preview changes also applied to a temporary copy of `origin/chxrro/perception-fixes` at `d8e652c`, where 22 targeted speech and perception tests passed.
+
+The owner named the app **Wayfeel** and asked to start the next UI iteration with its logo. The preview build adds a high-contrast W with a turquoise vibration accent as its app icon. The build installed on the iPhone 17 simulator, where the Home Screen showed both the icon and the Wayfeel label.
+
+The owner asked to bring in chxrro's perception changes and reduce distracting speech. The preview branch advanced to `d8e652c` (PR #27). Wayfeel now ranks speech by current obstacle risk, uses a generic obstacle label when only depth supports the warning, and gives urgent hazards a shorter speech cooldown. A scripted phone over WebSocket with synthetic detections and a simulated belt verified silence for an uncertain detection alone, generic speech metadata for a nearer hazard beside a bystander, a closing-person alert, an object alert, and suppression when the camera feed went stale. All 359 hub tests passed. The iPhone 17 simulator logged “Simulation. Caution. Person ahead, about 4 feet away and getting closer.” Live detection accuracy and audible VoiceOver behavior on hardware remain unverified. [Spoken alert setup](camera-bridge.md#spoken-obstacle-alerts)
+
+The owner asked for a **Where am I?** button that gives obstacle and fault warnings priority. The button requests one location when pressed and uses Apple's place lookup. The iPhone 17 simulator showed the first-use permission prompt and returned a nearby address as the button's accessibility value for a synthetic coordinate. The 78 iOS tests include checks that a healthy quiet belt stays in the alerts-on state and location speech waits for fresh, quiet status. Audio interruption on hardware remains unverified. [Location behavior](camera-bridge.md#where-am-i)
+
+The owner asked for a steadier wearer screen, an explicit status button, a recovery action for connection faults, and stationary practice. Start and Stop share one control above the scrolling content. **Hear status** reads the current state with VoiceOver or iPhone speech. Camera preview moved to Setup. In the iPhone 17 simulator, the same touch point started and stopped a test-pattern session, the hub recovery link opened pairing, **Hear status** logged the expected text, and Setup played the camera preview. A paired hub with a simulated belt accepted left, right, and connection-loss practice cues. All 78 iOS tests and 363 hub tests passed. VoiceOver gestures, audible speech, and practice vibrations on a physical belt remain unverified. [Practice setup](camera-bridge.md#practice-alerts)
+
 ## Conceptual pipeline, to validate
 
 ```text
@@ -100,6 +122,26 @@ Person/object classification (2026-11-07, `hub/`): implemented with 26 tests (no
 Simulated world (2026-11-07, `hub/haptic_hub/sim/`, **simulation only**): a ray-cast world renders glasses frames (504×896, 15 fps; the 60° horizontal FOV is assumed, not measured). A fake phone sends them as `HB` packets over the real WebSocket server to the real hub. The hub's belt commands go into the real `esp32/lib/belt_core` logic compiled for the host. With ground-truth stand-ins for the models, all 24 gating scenarios pass: direction, multiple obstacles, approaching person vs. still pole, head motion, low-confidence detections, stale frames, phone disconnect, model crash/stall, and lost belt writes leading to the firmware fault pattern. Each check was shown to fail on a deliberately broken hub. Probes found these limitations of the current thresholds/geometry: a ceiling or a 15–20° downward head pitch makes all motors buzz; low (0.45 m) obstacles are missed; detections below `detector_conf` get no early warning or uncertainty signal; box-growth TTC reads ~0.35 s late; box jitter can intermittently trigger TTC alerts at 5–7 m. These are not real-world results. See `hub/haptic_hub/sim/README.md`.
 
 Hardware bring-up kit (2026-11-08, `hub/` + docs): `haptic-hub bench` (motor map, levels, TTL failsafe, fault by command and by dropped link, reconnect, BLE write timing, JSON report; optional `--serial` to time TTL expiry from the belt's log) and the runbook [hardware-bringup.md](hardware-bringup.md). Tested only in simulation: the real `belt_core` logic compiled for the host (TTL 250 ms observed at ~254 ms), a Python TTL model, a fake BLE client and a pty serial port. **Not yet run on the real belt.** The runbook lists firmware/protocol gaps found (no BLE status characteristic, no firmware version in info) as proposals.
+
+Perception fixes (2026-11-08, branch `chxrro/perception-fixes`, **simulation only**):
+- Depth obstacles are measured relative to a RANSAC-fitted floor plane. This
+  needs the camera's horizontal FOV, which is still assumed to be 60°. If the
+  floor fit isn't trusted, a frame falls back to the old image band.
+- Box-growth TTC fits 1/height, with fit-quality gating and a change-point cap.
+- Detections below `detector_conf` are reported as `sectors[i].uncertain` in
+  the status (an additive protocol field). They don't drive the belt.
+
+With ground-truth perception, 38/38 gating scenarios pass, including new ones for
+the ceiling, looking down 15–20°, a 0.45 m box in view, on-time TTC and 4 px box
+jitter. Before the change, 10 of those failed. On a synthetic h = k/Z series the
+TTC bias went from +0.6 s to under +0.1 s.
+
+Real Depth Anything on the flat renders passes the same scenarios as before,
+except `head_bob_walk` (21% buzzing). Not run on real footage. Open:
+- low obstacles are lost below the frame at about 1.1 m;
+- uncertain detections don't vibrate the belt (a team decision);
+- measure the real FOV;
+- replay real clips in both depth geometries.
 
 None of the perception thresholds have been validated against measured distances.
 

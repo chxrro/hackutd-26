@@ -60,7 +60,8 @@ Checks look at the belt firmware's output, which is what the wearer would feel:
 - `motors_on` / `motors_off` / `strongest` / `level_rises`. "Off" means no alert,
   not a clear path. The fault pattern counts as buzzing, never as quiet.
 - `fault_within` / `fault_during` / `recovers_within` cover the fault pattern after injected failures.
-- `status_reports` checks the health the phone is told.
+- `status_reports` checks the health the phone is told; `status_uncertain` checks
+  the per-sector `uncertain` flag the phone is told (docs/protocol.md).
 - `no_collision` / `clearance_at_end` apply to the closed-loop walker.
 - Three **invariants** run in every scenario:
   - whenever the hub is unhealthy, the belt plays the fault pattern within 150 ms;
@@ -84,7 +85,12 @@ status characteristic. These are assumptions, not radio measurements.
 | `approach_wall`, `careful_walker` | intensity grows with proximity; closed loop: a walker who stops on alerts doesn't collide |
 | `person_approaching`, `person_vs_pole` | box-growth TTC alerts on an approaching person before depth range; a still pole at 3 m and a person who has stopped stay quiet |
 | `head_turn`, `camera_motion`, `walking_sway` | alerts follow the head (documented); head sway/bob on still objects doesn't alert |
-| `low_confidence_person`, `flaky_detector`, `noisy_depth` | detections below `detector_conf`, 30% missed detections, depth biased 15% plus noise |
+| `low_confidence_person`, `flaky_detector`, `noisy_depth` | detections below `detector_conf` (depth still alerts; status marks the sector `uncertain`), 30% missed detections, depth biased 15% plus noise |
+| `indoor_ceiling`, `low_ceiling` | a 2.6 m / 2.1 m ceiling doesn't alert (floor-relative depth) |
+| `looking_down`, `looking_down_pole`, `head_bob_walk`, `noisy_depth_looking_down` | head pitched 15–20° down, or bobbing 7–23°: the floor doesn't alert, a pole still does; also with depth 15% off plus noise |
+| `fov_50_*`, `fov_70_*` | the real FOV is 50° or 70° while the hub assumes 60°: floor stays quiet, a pole still alerts on the right motor |
+| `low_obstacle`, `low_obstacle_careful` | a 0.45 m box alerts while in view; a walker who stops on the alert doesn't hit it |
+| `ttc_on_time`, `jittery_boxes` | box-growth TTC alert is on by true TTC 2.5 s; 4 px box jitter doesn't alert on a person > 5 m away |
 | `camera_freeze`, `phone_disconnect` | stale or missing frames: fault after `frame_stale_s`, then recovery |
 | `user_stop`, `phone_vanishes`, `user_stop_unpaired` | the wearer's Stop (paired `end_session`): the session-ended cue (three pulses on motors 1+3), then quiet with status `stopped by wearer`, also while the phone's Wi-Fi drops; Start brings alerts back. A phone that vanishes without `end_session`, or an unpaired one that sends it, gets the fault pattern for as long as the hub runs |
 | `perception_crash`, `perception_stall` | model exceptions and hangs: fault, then recovery |
@@ -103,21 +109,36 @@ Each check was confirmed to fail on a deliberately broken hub:
 Under ideal (ground-truth) perception, these show up as properties of the current
 thresholds and geometry. Real models may make them better or worse.
 
-- `probe_indoor_ceiling`: all five motors buzz in an 8×12 m room with a 2.6 m
-  ceiling, with the nearest wall 6 m away. The top of the depth band (20% of image
-  height) sees the ceiling about 1.6 m away.
-- `probe_looking_down`: all five motors buzz in open ground with the head pitched
-  20° down. The bottom of the depth band sees the floor within 2.5 m. Lowering the
-  head by about 15° or more is enough.
-- `probe_low_obstacle`: a 0.45 m box is never alerted and the walker collides.
-  Once it is close, it sits below the depth band.
-- `probe_low_confidence_warning`: a person the detector scores below 0.35 gets no
-  early TTC warning and no "uncertain" signal. Only depth range alerts.
-- `probe_ttc_lag`: box-growth TTC reads about 0.35–0.4 s late, roughly half the
-  0.6 s fit window. At 1.2 m/s the TTC alert comes only about 0.2 s before
-  depth range.
-- `probe_jittery_boxes` (intermittent): 4 px box jitter sometimes makes the TTC
-  path alert on a person 5–7 m away. With only 3 samples needed, the slope fit is noisy.
+Fixed on 2026-11-08 (`chxrro/perception-fixes`) and now gating: the ceiling and
+looking-down false alerts (floor-relative depth), the missed low box while it is
+in view, the late TTC alert and the TTC alerts from box jitter (1/height fit with
+fit-quality gating). Low-confidence detections are now reported per sector
+(`uncertain`). The scenarios above check all of this.
+
+Still open (probes, reported, never fail the run):
+
+- `probe_low_obstacle`: the 0.45 m box is alerted from about 2.2 m. Once it is
+  closer than about 1.1 m it is below the bottom of the frame (60° H / 92° V FOV
+  assumed, head level). Nothing remembers it, so a walker who never stops still
+  hits it. `low_obstacle_careful` shows a walker who reacts to the alert stops in
+  time.
+- `probe_low_confidence_warning`: a person scored below `detector_conf` gets no
+  early belt warning. By design, uncertain boxes are only reported
+  (`sectors[i].uncertain` in the status) and don't drive the belt. Depth still
+  alerts once the person is in range. Whether uncertain objects should get a weak
+  vibration is a team decision.
+
+Real models on these renders (`--perception vision`, informational, Apple MPS,
+2026-11-08): `pole_left/center/right`, `approach_wall`, `clear_path`,
+`camera_freeze`, `indoor_ceiling`, `looking_down` and `looking_down_pole` pass,
+as on the old band geometry. `head_bob_walk` buzzes 21% of the time (the band
+geometry passed it). Depth Anything's floor on these flat renders is bent: it reads
+20–60% too far near the bottom of the frame. On some frames that passes the
+trust check but gives a tilted floor, so the side of the floor reads as obstacles.
+`low_obstacle` is alerted 22% of its window (band: 0%). `person_approaching` still
+gets no TTC alert because YOLO doesn't see the cylinder as a person. Whether real
+glasses video behaves like the renders here is unknown. Replay recorded clips
+with `--depth-geometry floor` and `band` before relying on either.
 
 The hub also reports `healthy` while BLE writes are being lost. Write-without-response
 gives no feedback, and only the belt's TTL catches it (`belt_writes_lost`).
@@ -126,7 +147,9 @@ gives no feedback, and only the belt's TTL catches it (`belt_writes_lost`).
 
 - Camera: 504×896 portrait at 15 fps, JPEG quality 60, as `meta/` requests.
   The **60° horizontal FOV** assumes about 100° diagonal and has not been measured
-  on the glasses. The probe results depend on it.
+  on the glasses. The hub's floor fit uses the same assumed FOV (`hfov_deg`); the
+  `fov_50_*` / `fov_70_*` scenarios render with a different true FOV to check
+  that a wrong assumption of ±10° is tolerated.
 - Eye height is 1.6 m. The camera sits at eye level with no offset. Obstacles are
   vertical prisms on flat ground.
 - The emulated belt reconnects instantly. The real hub's BLE reconnect backs off for 1 s or more.

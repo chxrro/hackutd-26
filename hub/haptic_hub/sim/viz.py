@@ -45,8 +45,15 @@ class SimView:
         canvas = np.zeros((self.size[1], self.size[0], 3), np.uint8)
         cam = cv2.resize(render.image, (self.cam_w, PANEL_H), interpolation=cv2.INTER_AREA)
         pc = self.cfg.perception
-        y0, y1 = int(PANEL_H * pc.band_top), int(PANEL_H * pc.band_bottom)
-        cv2.rectangle(cam, (0, y0), (self.cam_w - 1, y1), (255, 255, 255), 1)  # depth band
+        if pc.depth_geometry == "band":
+            y0, y1 = int(PANEL_H * pc.band_top), int(PANEL_H * pc.band_bottom)
+            cv2.rectangle(cam, (0, y0), (self.cam_w - 1, y1), (255, 255, 255), 1)  # depth band
+        else:  # floor mode: every row can hold an obstacle
+            y0, y1 = 0, PANEL_H - 1
+        floor = (result.debug.get("floor") if result is not None else None) or {}
+        if floor:
+            cv2.putText(cam, f"floor {floor['source']} pitch {floor['pitch_deg']:+.0f} h {floor['height_m']:.2f}m",
+                        (4, PANEL_H - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)  # fmt: skip
         n = pc.sectors
         for i in range(1, n):
             x = round(i * self.cam_w / n)

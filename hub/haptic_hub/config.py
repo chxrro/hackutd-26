@@ -57,17 +57,56 @@ class PerceptionConfig:
     motion: str = "off"  # "off" | "flow": optical-flow approach/crossing on tracked boxes
     flow: FlowConfig = field(default_factory=FlowConfig)
     infer_width: int = 384  # frames are resized to this width before inference
-    # Horizontal band of the image used for depth risk (fractions of height).
-    # The bottom of the frame is mostly floor, which always looks close.
+    # Which depth pixels can be an obstacle:
+    #   "floor" (default): back-project the depth map with the camera intrinsics, fit the
+    #       floor plane (RANSAC), and keep points between obstacle_min_height_m above the
+    #       floor and obstacle_max_above_eye_m above the camera. Rejects floor and ceiling
+    #       whatever the head pitch, and sees low obstacles. Needs hfov_deg.
+    #   "band" (previous behavior): fixed image rows band_top..band_bottom; sees the
+    #       ceiling, or the floor when the head tilts down, and misses low obstacles.
+    depth_geometry: str = "floor"
+    # Horizontal camera field of view. ASSUMED (~100 deg diagonal for the 9:16 portrait
+    # stream), not measured on the glasses. Measure it and set it here.
+    hfov_deg: float = 60.0
+    eye_height_m: float = 1.6  # camera height used when no floor can be fitted (assumed)
+    obstacle_min_height_m: float = 0.15  # lower is floor (depth noise, curbs below this are missed)
+    obstacle_max_above_eye_m: float = 0.3  # higher can't be walked into (ceiling, overhead signs)
+    obstacle_percentile: float = 2.5  # % of a sector's pixels an obstacle must cover (floor mode)
+    # Floor fit: plausible floors only, so a wall or ceiling is never taken for the floor.
+    floor_max_tilt_deg: float = 50.0  # normal vs. a level camera's up (head pitch/roll limit)
+    floor_height_range: tuple[float, float] = (0.9, 2.1)  # plausible camera heights above it, m
+    floor_tol_m: float = 0.05  # inlier distance from the plane: tol_m + tol_rel * range
+    floor_tol_rel: float = 0.03
+    floor_min_inlier_frac: float = 0.08  # of the sampled pixels
+    floor_hold_s: float = 0.5  # reuse the last fit this long when none is found, then the prior
+    # Trust check: if more of the sampled depth points than this lie below the floor, the depth
+    # map doesn't fit one plane with these intrinsics; that frame falls back to band mode.
+    floor_max_below_frac: float = 0.05
+    floor_stride: int = 4  # sample every n-th pixel for the fit (2 for obstacles)
+    # Band mode: horizontal band of the image used for depth risk (fractions of height).
     band_top: float = 0.20
     band_bottom: float = 0.75
-    depth_percentile: float = 5.0  # "nearest" = this percentile of the sector's depth
+    depth_percentile: float = 5.0  # band mode: "nearest" = this percentile of the sector's depth
     near_m: float = 0.6  # at or below this distance: full risk
     far_m: float = 2.5  # beyond this distance: no risk
     ttc_near_s: float = 1.0  # time to collision at or below this: full risk
     ttc_far_s: float = 3.0  # beyond this: no risk
     min_box_height: float = 0.08  # ignore detections smaller than this fraction of frame height
-    detector_conf: float = 0.35
+    detector_conf: float = 0.35  # boxes at or above this drive the belt (TTC risk)
+    # Boxes scoring from uncertain_conf up to the confident threshold don't drive the belt,
+    # but are reported: SectorRisk.uncertain and status sectors[i].uncertain. Never silence.
+    uncertain_conf: float = 0.15
+    # Box-growth TTC (perception/ttc.py): fit 1/height over this window (no lag for a
+    # constant-speed approach), need this many samples spanning min_span_s, and use the
+    # closing rate minus ttc_sigma standard errors (noisy fits read as farther away).
+    # The window trades jitter rejection (slope error ~ window^-1.5) against how long an
+    # alert lingers after an approach stops (cut by a change-point check in ttc.py).
+    ttc_window_s: float = 1.0
+    ttc_min_samples: int = 5
+    ttc_min_span_s: float = 0.25
+    ttc_sigma: float = 1.0
+    ttc_noise_px: float = 1.0  # assumed minimum box-height noise (pixels at infer_width)
+    ttc_change_sigma: float = 1.5  # confidence needed to cap the rate at the recent half-window's
     # Which detector feeds the tracker: "yolo" = yolo_model (80 COCO classes),
     # "openvocab" = YOLOE prompted with openvocab_prompts (perception/openvocab.py).
     detector: str = "yolo"
@@ -79,6 +118,16 @@ class PerceptionConfig:
         "low wall", "bench", "chair", "table", "fire hydrant", "tree trunk",
     )  # fmt: skip
     openvocab_conf: float = 0.25
+
+    @property
+    def confident_conf(self) -> float:
+        """Score at which the selected detector's boxes drive the belt."""
+        return self.openvocab_conf if self.detector == "openvocab" else self.detector_conf
+
+    @property
+    def tracker_conf(self) -> float:
+        """Score the detector is run with: low enough to also return uncertain boxes."""
+        return min(self.confident_conf, self.uncertain_conf)
 
 
 @dataclass

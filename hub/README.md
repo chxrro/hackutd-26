@@ -16,8 +16,8 @@ haptic_hub/
   perception/        frame -> risk per sector
     vision.py          fuses depth + tracked objects
     models.py          Depth Anything V2 and YOLO + ByteTrack wrappers
-    geometry.py        sectors, percentiles, risk curves (pure numpy)
-    ttc.py             time-to-collision from box growth (pure numpy)
+    geometry.py        sectors, floor-plane fit, obstacle heights, risk curves (pure numpy)
+    ttc.py             time-to-collision from 1/box-height fits (pure numpy)
     sweep.py           fake obstacle for bench tests
     classify.py        person vs. object label per tracked box (--classifier)
     nim.py             the same labels from a Nemotron vision model (cloud)
@@ -406,7 +406,7 @@ YOLOE-26n missed the stairs and called the sign "bench". YOLO-World v2-s found
 sign. Prompt wording matters: `raised curb` found a curb that `curb` didn't.
 
 Still unsolved with any detector: **transparent glass**, **drop-offs and
-curbs** at or below the bottom of the frame (also below the depth band), thin
+curbs** at or below the bottom of the frame (or under the 0.15 m floor margin), thin
 poles, and things lying on the ground. A box is also not a distance: TTC still
 comes from box growth, which a static pole or wall barely produces until it's
 close.
@@ -414,12 +414,35 @@ close.
 ## How the risk is computed
 
 1. **Depth** (static obstacles): Depth Anything V2 *metric* estimates meters
-   per pixel. Each of the 5 vertical strips takes the 5th-percentile depth in
-   the middle band of the image (the bottom is floor). Distance maps to risk
-   linearly: 0 beyond `far_m` (2.5 m), 1 at `near_m` (0.6 m).
+   per pixel. The depth map is back-projected to 3-D with the camera
+   intrinsics (`hfov_deg`, **60° assumed, not measured**: pass `--hfov` once it
+   is), and a RANSAC fit finds the floor plane. Only plausible floors count:
+   tilted ≤ 50° from level and 0.9–2.1 m below the camera, so a wall or ceiling is
+   never taken for the floor. With no plausible floor in view, the last fit is
+   reused for 0.5 s, then a level camera at 1.6 m is assumed. If more than 5 %
+   of the depth points lie *below* the floor, the depth map doesn't fit one plane
+   with these intrinsics (a monocular model's floor can be bent). That frame
+   falls back to the old fixed band, and the debug info says so. A pixel is an
+   obstacle if it is 0.15 m or more above the floor and at most 0.3 m above the
+   camera (a ceiling can't be walked into). Each of the 5 vertical strips
+   takes the distance that 2.5 % of its pixels are at or nearer to, measured
+   forward along the floor. Distance maps to risk linearly: 0 beyond `far_m`
+   (2.5 m), 1 at `near_m` (0.6 m). `--depth-geometry band` restores the old
+   fixed image rows (20–75 % of the height). Those rows see the ceiling, or the
+   floor when the head tilts down, and miss low obstacles.
 2. **Tracked objects** (things coming at you): YOLO + ByteTrack keep an ID
-   per object. TTC ≈ box height / growth rate, fitted over 0.6 s. Risk is 0
-   above 3 s and 1 below 1 s, applied to every strip the box covers.
+   per object. TTC comes from a weighted line fit of *1/box height* over 1 s.
+   For a constant-speed approach that line reaches zero at contact, so the fit
+   has no lag; fitting box height itself, as before, read about 0.6 s late. It
+   needs 5 samples spanning 0.25 s. It uses the closing rate minus one standard
+   error (from the fit residuals, at least 1 px of height noise), so jittery
+   boxes read as farther away. It is capped at the latest half-window's rate
+   when that is clearly slower (the object stopped). Risk is 0 above 3 s and 1
+   below 1 s, applied to every strip the box covers. Only boxes scoring at
+   least `detector_conf` (0.35) drive the belt. Boxes from `uncertain_conf`
+   (0.15) up to that threshold are reported as `uncertain` on their sectors
+   (status `sectors[i].uncertain`). They are never silently dropped, and they
+   never vibrate the belt.
 3. **Fusion**: sector risk = max(depth risk, TTC risk), plus flow risk with
    `--motion flow` (below).
 4. **Policy**: rising risk applies instantly, falling risk fades, values
@@ -465,7 +488,10 @@ thresholds are not validated; tune on replayed clips
 - Monocular depth and box-growth TTC are estimates. Not validated.
 - The camera is on the head and the belt on the torso, so direction is
   relative to where the wearer is looking.
-- Low obstacles, curbs and drop-offs are mostly outside the depth band.
+- Obstacles lower than 0.15 m (curbs, things lying on the ground) count as
+  floor, and drop-offs or stairs down aren't modeled (the floor is one plane). A
+  low obstacle leaves the bottom of the frame about 1.1 m away (simulation, 60°
+  FOV assumed). Nothing remembers it after that.
   `--detector openvocab` finds some hazards COCO lacks, but missed glass, a
   pole and a fallen bin in our test photos (see above).
 - Webcam/video results are not glasses results; the status says which source

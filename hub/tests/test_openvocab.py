@@ -170,7 +170,9 @@ def test_build_perception_selects_openvocab(monkeypatch):
 
     assert isinstance(result, VisionPerception)
     assert isinstance(result._tracker, SpyTracker)
-    assert made == {"model_path": cfg.openvocab_model, "prompts": ("person", "pole"), "device": "cpu", "confidence": 0.25}
+    # The detector runs at uncertain_conf so low-scoring boxes can be reported as uncertain;
+    # VisionPerception only lets boxes >= openvocab_conf drive the belt.
+    assert made == {"model_path": cfg.openvocab_model, "prompts": ("person", "pole"), "device": "cpu", "confidence": 0.15}
 
 
 def test_default_detector_is_still_coco_yolo(monkeypatch):
@@ -180,7 +182,7 @@ def test_default_detector_is_still_coco_yolo(monkeypatch):
     monkeypatch.setattr(models, "ObjectTracker", lambda *a: made.append(a) or "yolo-tracker")
     assert PerceptionConfig().detector == "yolo"
     assert build_tracker(PerceptionConfig(device="cpu")) == "yolo-tracker"
-    assert made == [("yolo11n.pt", "cpu", 0.35)]
+    assert made == [("yolo11n.pt", "cpu", 0.15)]  # uncertain_conf; >= detector_conf (0.35) drives the belt
 
 
 def test_unknown_detector_fails_before_loading_models():

@@ -21,7 +21,8 @@ from haptic_hub.control import Control
 from haptic_hub.haptics import HapticPolicy
 from haptic_hub.latency import LatencyStats
 from haptic_hub.perception.base import Perception
-from haptic_hub.protocol import BeltCommand
+from haptic_hub.perception.spoken_obstacle import spoken_obstacle
+from haptic_hub.protocol import BeltCommand, BeltMode
 from haptic_hub.safety import SafetyMonitor
 from haptic_hub.sources.base import FrameSource, LatestFrameSlot, StatusSink
 from haptic_hub.types import Frame, Health, PerceptionResult
@@ -155,7 +156,7 @@ class Hub:
     def status(self) -> dict[str, Any]:
         now = time.monotonic()
         age = self.safety.frame_age(now)
-        return {
+        status = {
             "type": "status",
             "mode": self.command.mode.name.lower(),
             "healthy": self.reason is None,
@@ -167,6 +168,12 @@ class Hub:
             "source": self.source.name,
             "inference_ms": round(self.result.inference_ms, 1) if self.result else None,
             "frame_age_ms": round(age * 1000, 1) if age is not None else None,
+            "spoken_obstacle": None,
             **self._frame_source_field(),
             **self.control.status_fields(self.result, self.health, self.cfg.perception.sectors),
         }
+        if (self.reason is None and self.command.mode == BeltMode.LEVELS
+                and not self.control.paused and not self.control.stopped
+                and self.result is not None and self.safety.check(now).ok):
+            status["spoken_obstacle"] = spoken_obstacle(self.result, self.command.levels, self.cfg.perception)
+        return status

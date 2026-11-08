@@ -20,10 +20,12 @@ from haptic_hub.control import (
     BELT_TEST_LEVEL,
     BELT_TEST_MAX_S,
     PAUSED_REASON,
+    PRACTICE_REASON,
     RESUME_REASON,
     Control,
     redact,
     sector_kinds,
+    sector_uncertain,
 )
 from haptic_hub.perception.classify import ClassifiedBox, ClassifiedPerception
 from haptic_hub.perception.models import TrackedBox
@@ -102,6 +104,45 @@ def test_defaults_and_ack_shape():
     check_ack_shape(a, 12)
     assert a["ok"] and a["settings"] == c.settings()
     assert json.loads(json.dumps(a)) == a  # JSON-safe
+
+
+@pytest.mark.parametrize("cue,mode,levels", [
+    ("left", BeltMode.LEVELS, (200, 0, 0, 0, 0)),
+    ("right", BeltMode.LEVELS, (0, 0, 0, 0, 200)),
+    ("fault", BeltMode.FAULT, (0, 0, 0, 0, 0)),
+])
+def test_practice_cue_is_paired_bounded_and_returns_to_quiet(cue, mode, levels):
+    clock = FakeClock()
+    c = Control(HubConfig(), clock=clock)
+    request = {"action": "practice_cue", "cue": cue}
+    no_camera = Health(False, "waiting for camera frames")
+    fault = BeltCommand.fault(5)
+    c.apply(fault, no_camera, "simulated", clock.t)
+    assert not ack(c, request, paired=False)["ok"]
+    assert ack(c, request)["ok"]
+    assert not ack(c, request)["ok"]  # duplicate cannot extend the cue
+    lead, reason = c.apply(fault, no_camera, "simulated", clock.t)
+    assert (lead.mode, reason) == (BeltMode.OFF, PRACTICE_REASON)
+    playing, reason = c.apply(fault, no_camera, "simulated", clock.t + 0.3)
+    assert (playing.mode, playing.levels, reason) == (mode, levels, PRACTICE_REASON)
+    quiet, reason = c.apply(fault, no_camera, "simulated", clock.t + 1)
+    assert (quiet.mode, reason) == (BeltMode.OFF, "stopped by wearer")
+
+
+def test_practice_yields_to_a_camera_session_and_a_real_belt_fault():
+    clock = FakeClock()
+    c = Control(HubConfig(), clock=clock)
+    request = {"action": "practice_cue", "cue": "left"}
+    c.apply(LEVELS, OK, "connected", clock.t)
+    assert ack(c, request)["ok"]
+    _, reason = c.apply(LEVELS, OK, "connected", clock.t + 0.3, "belt not acknowledging")
+    assert reason == "belt not acknowledging"
+    c.apply(LEVELS, OK, "connected", clock.t + 0.4)
+    assert ack(c, request)["ok"]
+    c.note_frame(clock.t + 0.5)
+    _, reason = c.apply(LEVELS, OK, "connected", clock.t + 0.5)
+    assert reason == RESUME_REASON
+    assert not ack(c, request)["ok"]
 
 
 def test_control_code_is_16_lowercase_hex_and_random():
@@ -529,9 +570,19 @@ def test_status_fields_shape_and_stale_results_give_no_kinds():
     c = Control(HubConfig())
     fields = c.status_fields(_classified_result(), OK, 5)
     assert set(fields) == {"paused", "stopped", "settings", "sectors"}
-    assert fields["sectors"][0] == {"kind": "person"} and len(fields["sectors"]) == 5
+    assert fields["sectors"][0] == {"kind": "person", "uncertain": False} and len(fields["sectors"]) == 5
     stale = c.status_fields(_classified_result(), Health(False, "no camera frames for 2.0 s"), 5)
-    assert stale["sectors"] == [{"kind": None}] * 5  # an old result says nothing about now
+    assert stale["sectors"] == [{"kind": None, "uncertain": False}] * 5  # an old result says nothing about now
+
+
+def test_status_marks_uncertain_sectors_only_while_fresh():
+    c = Control(HubConfig())
+    sectors = tuple(SectorRisk(0.0, uncertain=(i == 3)) for i in range(5))
+    result = PerceptionResult(1, 0.0, sectors, 1.0, {})
+    assert [s["uncertain"] for s in c.status_fields(result, OK, 5)["sectors"]] == [False, False, False, True, False]
+    stale = c.status_fields(result, Health(False, "perception failing: boom"), 5)
+    assert [s["uncertain"] for s in stale["sectors"]] == [False] * 5
+    assert sector_uncertain(None, 5) == [False] * 5
 
 
 def test_redact_hides_the_code():

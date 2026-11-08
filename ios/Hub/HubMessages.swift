@@ -67,20 +67,38 @@ struct HubSettings: Decodable, Equatable, Sendable {
 
 /// What the hub is telling the belt to do, sent ~5x per second.
 struct HubStatus: Decodable, Equatable, Sendable {
+  struct SpokenObstacle: Decodable, Equatable, Sendable {
+    let sector: Int
+    let kind: String
+    let distanceMeters: Double?
+    let closing: Bool
+    var urgent: Bool? = nil
+
+    enum CodingKeys: String, CodingKey {
+      case sector, kind, closing, urgent
+      case distanceMeters = "distance_m"
+    }
+  }
+
   struct Sector: Decodable, Equatable, Sendable {
     /// "person", "object" or nil: the kind of the largest labelled box in that
     /// motor's direction. For speech and display only. Says nothing about
     /// distance or safety; nil during faults, and nil doesn't mean "nothing there".
     let kind: String?
+    let uncertain: Bool
 
-    init(kind: String?) { self.kind = kind }
+    init(kind: String?, uncertain: Bool = false) {
+      self.kind = kind
+      self.uncertain = uncertain
+    }
 
     init(from decoder: Decoder) throws {
       let c = try decoder.container(keyedBy: CodingKeys.self)
       kind = (try? c.decodeIfPresent(String.self, forKey: .kind)) ?? nil
+      uncertain = (try? c.decode(Bool.self, forKey: .uncertain)) ?? false
     }
 
-    enum CodingKeys: String, CodingKey { case kind }
+    enum CodingKeys: String, CodingKey { case kind, uncertain }
   }
 
   let mode: String  // "off" | "levels" | "fault"
@@ -95,6 +113,9 @@ struct HubStatus: Decodable, Equatable, Sendable {
   let paused: Bool?
   let settings: HubSettings?
   let sectors: [Sector]?
+  let spokenObstacle: SpokenObstacle?
+  /// New hubs explicitly send null when there is no supported obstacle to speak.
+  let hasSpokenObstacleStatus: Bool
   /// The wearer ended the session (`end_session`); nil from hubs that predate it.
   let stopped: Bool?
 
@@ -102,12 +123,14 @@ struct HubStatus: Decodable, Equatable, Sendable {
     case type, mode, healthy, reason, levels, belt, source, paused, settings, sectors, stopped
     case inferenceMs = "inference_ms"
     case frameAgeMs = "frame_age_ms"
+    case spokenObstacle = "spoken_obstacle"
   }
 
   init(
     mode: String = "levels", healthy: Bool = true, reason: String? = nil, levels: [Int] = [0, 0, 0, 0, 0],
     belt: String = "connected", source: String? = nil, inferenceMs: Double? = nil, frameAgeMs: Double? = nil,
-    paused: Bool? = nil, settings: HubSettings? = nil, sectors: [Sector]? = nil, stopped: Bool? = nil
+    paused: Bool? = nil, settings: HubSettings? = nil, sectors: [Sector]? = nil, stopped: Bool? = nil,
+    spokenObstacle: SpokenObstacle? = nil
   ) {
     self.mode = mode
     self.healthy = healthy
@@ -121,6 +144,8 @@ struct HubStatus: Decodable, Equatable, Sendable {
     self.settings = settings
     self.sectors = sectors
     self.stopped = stopped
+    self.spokenObstacle = spokenObstacle
+    hasSpokenObstacleStatus = spokenObstacle != nil
   }
 
   init(from decoder: Decoder) throws {
@@ -140,6 +165,8 @@ struct HubStatus: Decodable, Equatable, Sendable {
     settings = (try? c.decodeIfPresent(HubSettings.self, forKey: .settings)) ?? nil
     sectors = (try? c.decodeIfPresent([Sector].self, forKey: .sectors)) ?? nil
     stopped = (try? c.decodeIfPresent(Bool.self, forKey: .stopped)) ?? nil
+    spokenObstacle = (try? c.decodeIfPresent(SpokenObstacle.self, forKey: .spokenObstacle)) ?? nil
+    hasSpokenObstacleStatus = c.contains(.spokenObstacle)
   }
 
   /// Whether alerts are paused. Read from `paused` (or `settings.paused`), never
@@ -220,12 +247,25 @@ struct SettingsChange: Encodable, Equatable, Sendable {
   }
 }
 
+enum PracticeCue: String, CaseIterable, Sendable {
+  case left, right, fault
+
+  var label: String {
+    switch self {
+    case .left: return "Left cue"
+    case .right: return "Right cue"
+    case .fault: return "Connection-loss cue"
+    }
+  }
+}
+
 enum ControlAction: Equatable, Sendable {
   /// No effect: replies with the current settings, so it also checks pairing.
   case get
   case pause
   case resume
   case beltTest
+  case practiceCue(PracticeCue)
   /// The wearer pressed Stop (docs/protocol.md, "Deliberate stop vs. lost phone"):
   /// the hub plays the session-ended cue and stays quiet instead of faulting.
   /// Send it only from Stop, never when the app is backgrounded or the stream fails.
@@ -238,6 +278,7 @@ enum ControlAction: Equatable, Sendable {
     case .pause: return "pause"
     case .resume: return "resume"
     case .beltTest: return "belt_test"
+    case .practiceCue: return "practice_cue"
     case .endSession: return "end_session"
     case .set: return "set"
     }
@@ -273,6 +314,7 @@ enum HubOutgoing {
     let id: Int
     let action: String
     let settings: SettingsChange?
+    let cue: String?
   }
 
   /// `control_code` is omitted when nil: the hub then accepts frames but refuses control.
@@ -284,8 +326,10 @@ enum HubOutgoing {
 
   static func control(id: Int, _ action: ControlAction) -> String {
     var settings: SettingsChange?
+    var cue: String?
     if case .set(let change) = action { settings = change }
-    return json(Control(id: id, action: action.wireName, settings: settings))
+    if case .practiceCue(let practiceCue) = action { cue = practiceCue.rawValue }
+    return json(Control(id: id, action: action.wireName, settings: settings, cue: cue))
   }
 
   private static func json(_ value: some Encodable) -> String {

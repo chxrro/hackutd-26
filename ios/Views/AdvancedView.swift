@@ -5,6 +5,7 @@ import SwiftUI
 /// Separate from the hub and the belt.
 struct AdvancedView: View {
     @ObservedObject var bridge: BridgeModel
+    @Environment(\.accessibilityDimFlashingLights) private var dimFlashingLights
     let hubRunning: Bool
     @State private var address = ""
     @State private var code = ""
@@ -59,9 +60,15 @@ struct AdvancedView: View {
                 }
             }
 
-            Section("On-screen preview") {
+            Section {
                 Button("Preview test pattern") { bridge.start(.test, destination: .screen) }
+                    .disabled(dimFlashingLights)
                 Button("Preview glasses feed") { bridge.start(.glasses, destination: .screen) }
+                    .disabled(dimFlashingLights)
+            } header: {
+                Text("On-screen preview")
+            } footer: {
+                if dimFlashingLights { Text("Video preview hidden. Dim Flashing Lights is on.") }
             }
             .disabled(busy)
 
@@ -80,7 +87,11 @@ struct AdvancedView: View {
                 .font(.headline)
             ZStack {
                 Color.black
-                if let image = bridge.previewImage {
+                if dimFlashingLights {
+                    Text("Video preview hidden. Dim Flashing Lights is on.")
+                        .foregroundStyle(.white)
+                        .padding()
+                } else if let image = bridge.previewImage {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFit()
