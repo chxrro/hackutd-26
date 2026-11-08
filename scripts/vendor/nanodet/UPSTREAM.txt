@@ -1,7 +1,7 @@
 OpenCV Zoo NanoDet; Apache-2.0
 Pinned revision: 48b10fa505aeb51fbd127fc60a5c660040e823b7
 Source: https://raw.githubusercontent.com/opencv/opencv_zoo/48b10fa505aeb51fbd127fc60a5c660040e823b7/models/object_detection_nanodet/
-Unmodified helper and upstream license/readme.
+Unmodified helper and upstream license; README trailing whitespace removed.
 Model Git LFS pointer:
 version https://git-lfs.github.com/spec/v1
 oid sha256:4b82da9944b88577175ee23a459dce2e26e6e4be573def65b1055dc2d9720186

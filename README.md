@@ -5,6 +5,7 @@ An accessibility prototype exploring Ray-Ban camera video and a vibration belt t
 ## Project context
 - [Agent guide](AGENTS.md): instructions for agents working in this repository.
 - [Project context](docs/project-context.md): goals, initial status, open decisions, and proposed milestones.
+- [NVIDIA vision agent handoff](docs/agent-handoff.md): current implementation, setup, checks, and next steps.
 
 Brev-hosted Cosmos3-Edge image inference and a MacBook camera multi-frame test are verified. The camera-to-belt integration remains unverified. Read the project context for current status and limitations.
 
@@ -49,6 +50,10 @@ The separate CPU replay/calibration tools remain available for experiments.
 
 See the [depth, collision-risk, and belt investigation](docs/perception-and-haptics.md)
 for the next perception experiment and proposed vibration rules.
+
+The NVIDIA webcam experiment in `scripts/` is separate from the team hub below.
+It has not been connected to the hub or belt. Use separate virtual environments
+for these components; their OpenCV dependency variants differ.
 
 ## Layout
 

@@ -3,6 +3,14 @@
 Setup started on November 7, 2026. The user authorized Brev account setup,
 redemption of hackathon credits, and a GPU deployment for the reasoner.
 
+## Current handoff
+
+The setup and shutdown notes below describe earlier milestones. Later owner-authorized
+webcam and collision tests restarted the VM; do not infer its current power state
+from an earlier **STOPPED** entry. See [the agent handoff](agent-handoff.md) and
+[the latest project context](project-context.md). Check `brev ls` before starting
+or stopping compute. Private session data and account credentials are not in Git.
+
 ## Account and credits
 
 - Brev CLI: `v0.6.337`, installed at `~/.local/bin/brev`; `~/.local/bin` was added to zsh's PATH.

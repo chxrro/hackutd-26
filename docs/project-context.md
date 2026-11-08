@@ -361,3 +361,32 @@ For each important decision, record the date, choice, reason, and evidence or re
   Blocked checks: none. Not run: new physical-camera collision assessment,
   multi-object real-camera accuracy, real collision/range validation, Ray-Ban
   capture or belt/walking trials. No apparent collision must not imply clear path.
+
+
+## GitHub agent handoff — November 7, 2026
+
+- Owner requested publishing all progress so another agent can continue. The
+  NVIDIA webcam, private recording, offline perception/calibration, deployment,
+  tests and research documentation were captured on
+  `nathan/nvidia-collision-handoff`. Integrated `origin/main` through `3e8d956`
+  without changing teammate hub, firmware, iOS, bridge or protocol code. The
+  `.gitignore` merge retains both camera-data exclusions and teammate build rules.
+- Added [agent handoff](agent-handoff.md) with setup, architectural boundaries,
+  cost controls, commands, evidence, unresolved work and private-state exclusions.
+  Linked it from README. Clarified that historical STOPPED VM notes do not
+  establish current power state. The NVIDIA experiment and teammate hub still
+  use separate environments and are not connected to one another or the belt.
+- After integration, passed 68 Python tests, 27 JavaScript tests, Python compile,
+  JavaScript syntax and dependency consistency checks. Removed trailing whitespace
+  in the newly introduced vendored README and JS EOF; noted the README-only
+  normalization in upstream attribution. Final branch whitespace check is clean.
+- Read-only local status found the existing server idle in `session_000003`, with
+  zero saved records and no error. Left the script running. No new GPU calls,
+  restarts or paid inference were performed for GitHub publication. Current VM
+  power and invoice totals were not re-verified.
+- Failed checks: initial publication whitespace check found newly tracked
+  whitespace; corrected before final verification. Blocked checks: none.
+  Not run: teammate component tests or new physical-camera, Ray-Ban, belt,
+  walking, collision/range or GPU validation. Prior evidence remains separately
+  documented. Credentials, recordings, weights, local account config and caches
+  are excluded from the published changes.

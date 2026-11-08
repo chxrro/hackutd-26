@@ -337,4 +337,3 @@ if (typeof document !== 'undefined') {
     void status();
   }
 }
-

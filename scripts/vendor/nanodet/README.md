@@ -11,14 +11,14 @@ Nanodet: NanoDet is a FCOS-style one-stage anchor-free object detection model wh
 
 ### Python
 
-Run the following command to try the demo: 
+Run the following command to try the demo:
 ```shell
 # detect on camera input
 python demo.py
 # detect on an image
 python demo.py --input /path/to/image -v
 ```
-Note: 
+Note:
 - image result saved as "result.jpg"
 
 ### C++
@@ -58,7 +58,7 @@ The model is evaluated on [COCO 2017 val](https://cocodataset.org/#download). Re
 <table>
 <tr><th>Average Precision </th><th>Average Recall</th></tr>
 <tr><td>
-  
+
 |  area  |  IoU  |  Average Precision(AP)  |
 |:-------|:------|:------------------------|
 |  all  |  0.50:0.95  |  0.304  |
@@ -67,7 +67,7 @@ The model is evaluated on [COCO 2017 val](https://cocodataset.org/#download). Re
 |  small  |  0.50:0.95  |  0.107  |
 |  medium  |  0.50:0.95  |  0.322  |
 |  large  |  0.50:0.95  |  0.478  |
- 
+
  </td><td>
 
   area  |  IoU  |  Average Recall  |
@@ -133,7 +133,7 @@ All files in this directory are licensed under [Apache 2.0 License](./LICENSE).
 - Contributor: Sri Siddarth Chakaravarthy
 - Github Profile: https://github.com/Sidd1609
 - Organisation: OpenCV
-- Project: Lightweight object detection models using OpenCV 
+- Project: Lightweight object detection models using OpenCV
 
 ## Reference
 
