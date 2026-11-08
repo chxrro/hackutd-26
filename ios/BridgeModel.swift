@@ -33,8 +33,8 @@ final class BridgeModel: ObservableObject {
 
     /// Receives every frame while the destination is `.hub`.
     var onFrame: ((UIImage) -> Void)?
-    /// Receives the stream state for `phone_status` while the destination is `.hub`.
-    var onStreamState: ((String) -> Void)?
+    /// Receives the stream state and frame source for `phone_status` while the destination is `.hub`.
+    var onStreamState: ((String, HubFrameSource?) -> Void)?
 
     /// When the last frame arrived from the source, nil before the first.
     var lastFrame: ContinuousClock.Instant? { lastFrameAt }
@@ -231,8 +231,13 @@ final class BridgeModel: ObservableObject {
         if message == GlassesCamera.updateRequiredMessage { glassesNeedUpdate = true }
     }
 
+    /// What produces the frames of the current run, for `phone_status.frame_source`.
+    var hubFrameSource: HubFrameSource? {
+        activeSource.map { HubFrameSource(source: $0, mockGlasses: usingMockGlasses) }
+    }
+
     private func reportStream(_ state: String) {
-        if activeDestination == .hub { onStreamState?(state) }
+        if activeDestination == .hub { onStreamState?(state, hubFrameSource) }
     }
 
     private func offer(_ image: UIImage) {
