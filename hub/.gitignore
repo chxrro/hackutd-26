@@ -2,3 +2,5 @@
 *.pt
 .pytest_cache/
 recordings/
+# MobileCLIP text encoders that YOLOE (--detector openvocab) downloads next to its weights
+*.ts
