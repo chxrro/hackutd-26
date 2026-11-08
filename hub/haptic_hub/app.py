@@ -117,6 +117,7 @@ class Hub:
             latest = self.slot.latest
             if latest is not None:  # count arrivals even while perception is busy
                 self.safety.frame_received(latest.received_at)
+                self.control.note_frame(latest.received_at)  # a frame after end_session starts a new session
             health = self.safety.check(started)
             self.health = health
             command = self.policy.command(self.result, health)

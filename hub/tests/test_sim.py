@@ -146,7 +146,7 @@ def test_person_gets_a_box_and_walls_do_not():
     assert np.isfinite(r.depth).all()
 
 
-FAST = ["pole_left", "person_vs_pole", "camera_freeze", "belt_writes_lost", "belt_not_applying"]
+FAST = ["pole_left", "person_vs_pole", "camera_freeze", "belt_writes_lost", "belt_not_applying", "user_stop", "phone_vanishes"]
 GATING = [n for n, sc in SCENARIOS.items() if "probe" not in sc.tags]
 SELECTED = GATING if os.environ.get("HUB_SIM_ALL") else FAST
 

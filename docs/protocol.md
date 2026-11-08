@@ -49,6 +49,11 @@ Golden vector (seq=1, capture_ms=1700000000000, 504×896, jpeg=`ff d8 ff d9`):
 `stream` is the glasses stream state as the app sees it (`stopped`,
 `waitingForDevice`, `starting`, `streaming`, `paused`, `stopping`).
 
+`stream: "starting"` (from any connection, paired or not) also ends a wearer's
+stop (`end_session`, see "Control"), as does a new frame. Added 2026-11-08; no
+other `stream` value changes anything on the hub. `phone_status` is a report,
+not a command: it can't stop the hub.
+
 `frame_source` (optional, additive 2026-11-08) says where the frames on this
 connection come from:
 
@@ -109,10 +114,14 @@ change the belt output.
   the status characteristic (section 3, "Status"), `"belt TTL expired"`,
   `"belt playing fault pattern"`, `"belt not applying commands"` and
   `"belt status stale"` also set `healthy: false` while `belt: "connected"`.
-- Reason precedence: camera/perception faults, then `"belt disconnected"` /
-  `"belt connecting"`, then `"belt not acknowledging"`, then the belt status
-  reasons above, then `"alerts paused"` / `"resuming alerts"`. A belt problem
-  also ends a running belt test.
+- Reason precedence: camera/perception faults (ignored while stopped by the
+  wearer), then `"belt disconnected"` / `"belt connecting"`, then
+  `"belt not acknowledging"`, then the belt status reasons above, then
+  `"stopped by wearer"`, then `"alerts paused"` / `"resuming alerts"`. A belt
+  problem also ends a running belt test.
+- `"stopped by wearer"` (added 2026-11-08): the paired phone sent `end_session`
+  (see "Control"). `healthy: false`; the belt plays the session-ended cue, then
+  `mode: "off"`. It is a deliberate stop, never a clear path.
 - `belt_firmware` (optional, added 2026-11-08): what the belt itself last
   reported, or `null` when it doesn't report (old firmware, simulated belt, not
   connected). For display and logs; `healthy` and `reason` already account for it.
@@ -165,6 +174,7 @@ connection. The code changes every time the hub restarts.
 | `pause`     | none | Obstacle alerts stop. The belt plays the **pause cue**, then a **paused reminder** pulse every 15 s (see "Belt cues" in section 3). Status shows `healthy: false`, `reason: "alerts paused"`, `paused: true`. |
 | `resume`    | none | The belt plays the **resume cue** (≤ 0.6 s, status `reason: "resuming alerts"`), then back to normal. |
 | `belt_test` | none | The hub plays a short sweep across the motors (≤ 3 s), then goes back to normal. Refused while paused, while a test is running, or while the belt is disconnected. |
+| `end_session` | none | Added 2026-11-08. The wearer pressed Stop. The belt plays the **session-ended cue** once, then stays quiet. Status: `healthy: false`, `reason: "stopped by wearer"`, `stopped: true`. See "Deliberate stop" below. |
 | `set`       | `settings` object, one or more keys below | Change settings. Unknown keys reject the whole request. |
 
 `pause` and `resume` are idempotent. `pause` also stops a running belt test.
@@ -184,6 +194,38 @@ fault wins. A resume cue cut off by a fault plays once the fault clears.
 
 During a belt test, status shows `mode: "levels"`, `healthy: false` and
 `reason: "belt test"`. Those vibrations are not obstacles.
+
+**Deliberate stop vs. lost phone** (`end_session`, additive, 2026-11-08). Without
+it, a hub can't tell a wearer who pressed Stop from a phone that crashed, lost
+Wi-Fi or was backgrounded: frames just stop, and the belt plays the fault
+pattern for as long as the hub runs.
+
+- **The phone** sends `end_session` from Stop *before* it stops the camera, and
+  sends no frames after it until its next run begins with `phone_status`
+  `"starting"`. It never sends `end_session` when the app is backgrounded or
+  terminated, or when the stream fails by itself: those must keep the fault
+  pattern.
+- **Only a paired connection** can stop the hub. Unpaired, the request is answered
+  `"not paired"` and nothing changes, so frames stopping still means the fault
+  pattern. `phone_status` can't stop the hub.
+- **The hub**, once stopped: plays the session-ended cue once, then sends `off` at
+  its normal rate (the belt's TTL failsafe still applies if the hub dies). It
+  ignores "no camera frames" and other input/perception faults, also after the
+  phone disconnects. Belt problems still show in `reason` and play as before.
+  `end_session` clears `paused`, cancels a belt test, and is idempotent (a repeat
+  doesn't replay the cue). The cue replays when a belt problem clears while still
+  stopped, like the pause cue.
+- **A new session** starts when a frame arrives after `end_session`, or when any
+  connection sends `phone_status` `"starting"`. Starting is safe from anyone: it
+  only brings back normal behaviour, including the fault pattern if no frames
+  follow. The **resume cue** plays once the hub is healthy again (the same "alerts
+  are live" signal as `resume`), and status returns to normal.
+- The stop lives in the hub's memory: a restarted hub is not stopped (it plays
+  the fault pattern until frames arrive).
+
+Status addition: `"stopped": true | false` (optional; older hubs omit it, and
+answer `end_session` with `"unknown action"`). While stopped, all
+`sectors[i].kind` are `null`.
 
 | Setting       | Values | Meaning |
 |---------------|--------|---------|
@@ -366,7 +408,8 @@ acknowledged-write rate on the bench.
 - **Fault pattern** (double pulse on all motors every 2 s) = the system can't
   vouch for its output: no camera frames, perception failing, or the hub link
   lost. The wearer must not treat this, or silence, as a clear path.
-- **Silence means no alert, not a clear path.**
+- **Silence means no alert, not a clear path.** After the session-ended cue,
+  silence means the wearer stopped the system: no alerts at all.
 
 ### Belt cues (hub, added 2026-11-08)
 
@@ -382,6 +425,7 @@ the reminder. None of this has been felt on a real belt yet.
 | Paused reminder | One 0.15 s pulse on both outer motors at low level (110), every 15 s after the pause cue. Configurable (`--pause-reminder`, `0` = off, else ≥ 2 s). | Alerts are still paused. |
 | Resume | Inside out: the centre, then both inner motors, then both outer motors, 0.15 s each (0.6 s with the gap). Obstacle alerts start right after. | Alerts are live again. |
 | Belt test (existing) | One motor at a time, left to right, 0.4 s each (≤ 3 s). | Test only. Real alerts are replaced for its duration. |
+| Session ended (added 2026-11-08) | Three slow pulses on the inner pair (`L1`+`R1`), 0.3 s each with 0.2 s gaps, fading: level 200, 155, 110 (1.45 s with the gap). Plays once, then silence. | The wearer pressed Stop (`end_session`). No alerts until the next Start; the silence that follows is the stop, not a clear path. |
 
 ### Belt failsafe behavior (firmware)
 

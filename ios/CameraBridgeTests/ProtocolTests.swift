@@ -81,6 +81,41 @@ final class ProtocolTests: XCTestCase {
     XCTAssertEqual(HubOutgoing.control(id: 3, .beltTest), #"{"action":"belt_test","id":3,"type":"control"}"#)
   }
 
+  func testEndSessionMatchesDoc() throws {
+    let text = HubOutgoing.control(id: 7, .endSession)
+    XCTAssertEqual(text, #"{"action":"end_session","id":7,"type":"control"}"#)
+    try assertSameJSON(text, #"{"type": "control", "id": 7, "action": "end_session"}"#)
+  }
+
+  func testParsesStoppedStatusLeniently() throws {
+    let base = #""type":"status","levels":[0,0,0,0,0],"belt":"connected""#
+    let stopped = try XCTUnwrap(HubStatus.parse(
+      #"{\#(base),"mode":"off","healthy":false,"reason":"stopped by wearer","stopped":true,"paused":false}"#))
+    XCTAssertEqual(stopped.stopped, true)
+    XCTAssertFalse(stopped.healthy)
+    XCTAssertNil(try XCTUnwrap(HubStatus.parse(#"{\#(base),"mode":"levels","healthy":true}"#)).stopped)  // older hub
+    XCTAssertNil(try XCTUnwrap(HubStatus.parse(#"{\#(base),"mode":"levels","healthy":true,"stopped":"yes"}"#)).stopped)
+  }
+
+  /// After end_session the client sends no frames until the next run's "starting".
+  func testHubClientHoldsFramesFromEndSessionUntilStarting() async {
+    let client = HubClient()
+    var held = await client.framesHeld
+    XCTAssertFalse(held)
+    _ = await client.sendControl(id: 1, .pause)
+    held = await client.framesHeld
+    XCTAssertFalse(held)
+    _ = await client.sendControl(id: 2, .endSession)  // not connected: not sent, but frames are held anyway
+    held = await client.framesHeld
+    XCTAssertTrue(held)
+    await client.reportPhoneStatus(stream: "stopped", frameSource: .glasses)
+    held = await client.framesHeld
+    XCTAssertTrue(held)
+    await client.reportPhoneStatus(stream: "starting", frameSource: .glasses)
+    held = await client.framesHeld
+    XCTAssertFalse(held)
+  }
+
   func testControlSetEncodesEveryKnownSetting() throws {
     let text = HubOutgoing.control(id: 4, .set(SettingsChange(classifier: .nim, alertRange: .near, record: true)))
     try assertSameJSON(

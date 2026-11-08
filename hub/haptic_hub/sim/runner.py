@@ -178,7 +178,10 @@ async def run_scenario(
         sample.seq = seq
         timeline.frames.append(sample)
 
-    phone = SimPhone(f"ws://127.0.0.1:{port}", capture, truth, t0, fps=scenario.fps, on_frame=on_frame)
+    # A paired phone, like the app with its control code, unless the scenario says otherwise.
+    code = None if any(f.kind == "user_stop_unpaired" for f in scenario.faults) else hub.control.code
+    phone = SimPhone(f"ws://127.0.0.1:{port}", capture, truth, t0, fps=scenario.fps, on_frame=on_frame,
+                     control_code=code)  # fmt: skip
     phone.statuses = timeline.statuses
 
     async def world_loop() -> None:
@@ -193,6 +196,7 @@ async def run_scenario(
             active = {f.kind: f for f in scenario.faults if f.start <= t < f.end}
             phone.faults.frozen = "camera_freeze" in active
             phone.faults.disconnected = "phone_disconnect" in active
+            phone.faults.user_stopped = "user_stop" in active or "user_stop_unpaired" in active
             phone.faults.garbage_every = int(active["garbage"].value) if "garbage" in active else 0
             phone.faults.latency_s = active["latency"].value if "latency" in active else 0.0
             phone.faults.jitter_s = active["latency"].value / 2 if "latency" in active else 0.0
@@ -255,6 +259,9 @@ async def run_scenario(
         "bad_messages": server.bad_messages,
         "garbage_sent": phone.garbage_sent,
         "phone_connects": phone.connects,
+        "end_session_sent": phone.stops,
+        "end_session_ok": sum(1 for a in phone.acks if a.get("ok") and a.get("id") is not None),
+        "end_session_refused": sum(1 for a in phone.acks if not a.get("ok")),
         "frames_dropped_by_hub": hub.slot.dropped,
         "belt_writes": belt.writes,
         "belt_writes_lost": belt.lost_writes,

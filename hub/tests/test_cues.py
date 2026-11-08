@@ -66,3 +66,37 @@ def test_check_reminder_s(value, ok):
     else:
         with pytest.raises(ValueError):
             cues.check_reminder_s(value)
+
+
+# -- session ended (end_session) ----------------------------------------------
+
+
+@pytest.mark.parametrize("motors", [3, 4, 5, 8])
+def test_session_end_cue_is_bounded_and_never_lights_every_motor(motors):
+    cue = cues.session_end_cue(motors)
+    assert cues.duration(cue) <= 1.5
+    assert cue[0] == (cues.CUE_STEP_S, (0,) * motors)  # leading gap, like the other cues
+    for _, levels in cue:
+        assert len(levels) == motors and not all(levels)
+
+
+def test_session_end_cue_is_three_slow_fading_pulses_on_the_inner_pair():
+    cue = cues.session_end_cue(5)
+    pulses = [(s, lv) for s, lv in cue[1:] if any(lv)]
+    assert [lv for _, lv in pulses] == [(0, 200, 0, 200, 0), (0, 155, 0, 155, 0), (0, 110, 0, 110, 0)]
+    assert all(s == cues.SESSION_END_PULSE_S > cues.CUE_STEP_S for s, _ in pulses)  # slower than any sweep step
+    assert cues.duration(cue) == pytest.approx(1.45)
+    assert cues.play(cue, cues.duration(cue)) is None  # plays once
+
+
+def test_session_end_cue_differs_from_every_other_cue():
+    end = [(s, lv) for s, lv in cues.session_end_cue(5)[1:]]
+    # Rhythm: the same pair pulses three times with gaps; the sweeps move ring to
+    # ring with no gap, the reminder is one short pulse, the fault is all motors.
+    lit = [lv for _, lv in end if any(lv)]
+    assert len({tuple(i for i, x in enumerate(lv) if x) for lv in lit}) == 1 and len(lit) == 3
+    assert all(not any(lv) for _, lv in end[1::2])  # a gap between pulses
+    longest_other = max(s for s, lv in cues.pause_cue(5) + cues.resume_cue(5) if any(lv))
+    assert min(s for s, lv in end if any(lv)) > max(longest_other, cues.REMINDER_PULSE_S)
+    # never one motor at a time (belt test) and never the outer pair (reminder)
+    assert all(sum(1 for x in lv if x) == 2 and lv[0] == lv[4] == 0 for lv in lit)

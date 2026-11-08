@@ -146,7 +146,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .banner-title { font-size: 1.6rem; font-weight: 800; line-height: 1.2; overflow-wrap: anywhere; }
 .banner-detail { font-size: 1rem; margin-top: 0.2rem; }
 .banner[data-level="ok"] { background: var(--ok-bg); color: var(--ok-text); border-color: var(--ok-line); }
-.banner[data-level="paused"] { background: var(--paused-bg); color: var(--paused-text); border-color: var(--paused-line); }
+.banner[data-level="paused"],
+.banner[data-level="stopped"] { background: var(--paused-bg); color: var(--paused-text); border-color: var(--paused-line); }
 .banner[data-level="test"] { background: var(--test-bg); color: var(--test-text); border-color: var(--test-line); }
 .banner[data-level="fault"] { background: var(--fault-bg); color: var(--fault-text); border-color: var(--fault-line); }
 
