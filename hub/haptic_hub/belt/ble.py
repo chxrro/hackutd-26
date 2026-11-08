@@ -14,13 +14,18 @@ from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 from bleak.exc import BleakError
 
-from haptic_hub.belt.confirm import CommandWriter, WriteHealth, WriteLinkBroken, ttl_window_s
+from haptic_hub.belt.confirm import CommandWriter, StatusHealth, WriteHealth, WriteLinkBroken, ttl_window_s
 from haptic_hub.protocol import (
     BELT_COMMAND_UUID,
     BELT_DEVICE_NAME,
     BELT_INFO_UUID,
     BELT_SERVICE_UUID,
+    BELT_STATUS_UUID,
     BeltCommand,
+    BeltInfo,
+    ProtocolError,
+    decode_belt_info,
+    decode_belt_status,
     encode_belt_command,
 )
 
@@ -45,6 +50,17 @@ def _supports_write_with_response(client: Any) -> bool | None:
     if char is None:
         return None
     return "write" in {p.lower() for p in char.properties}
+
+
+def _has_status(client: Any) -> bool:
+    """Firmware from 2026-11-08 on has a status characteristic with notify. Only
+    trusted from the discovered GATT table: older firmware (or a client that can't
+    say) gets the write acknowledgement checks alone."""
+    try:
+        char = client.services.get_characteristic(BELT_STATUS_UUID)
+        return char is not None and "notify" in {p.lower() for p in char.properties}
+    except Exception:  # noqa: BLE001 - no services collection (or a fake client): assume old firmware
+        return False
 
 
 class BleBelt:
@@ -78,6 +94,10 @@ class BleBelt:
         self._window_s = ttl_window_s(BeltCommand.off(expected_motors))
         self.confirming = True  # False when the firmware only takes write-without-response
         self.reconnects = 0  # connections dropped by the hub because writes weren't acknowledged
+        self.status_health = StatusHealth()
+        self.status_supported = False  # this connection's firmware notifies its status
+        self.info: BeltInfo | None = None
+        self._bad_status_logged = False
 
     @property
     def state(self) -> str:
@@ -86,10 +106,61 @@ class BleBelt:
     @property
     def fault(self) -> str | None:
         """Why the belt can't be confirmed to be following the hub while connected
-        ("belt not acknowledging"), else None. Link state is reported by `state`."""
-        if self._state != "connected" or self._writer is None or not self.confirming:
+        ("belt not acknowledging", or a belt status reason from confirm.py), else
+        None. Link state is reported by `state`."""
+        if self._state != "connected" or self._writer is None:
             return None
-        return self.health.check(self._clock(), self._window_s)
+        now = self._clock()
+        if self.confirming and (reason := self.health.check(now, self._window_s)) is not None:
+            return reason
+        if self.status_supported:
+            return self.status_health.check(now)
+        return None
+
+    @property
+    def confirmed(self) -> str | None:
+        """How strongly the hub knows the belt follows it: "status" (a fresh status
+        names a recent command), "ack" (writes acknowledged only), or None."""
+        if self._state != "connected" or self._writer is None or self.fault is not None:
+            return None
+        now = self._clock()
+        if self.status_supported and self.status_health.confirming(now):
+            return "status"
+        if self.confirming and self.health.acked > 0:
+            return "ack"
+        return None
+
+    @property
+    def firmware(self) -> dict[str, Any] | None:
+        """The belt's last status report, for the status JSON (docs/protocol.md
+        section 2, `belt_firmware`); None without one."""
+        st, at = self.status_health.last, self.status_health.last_at
+        if self._state != "connected" or not self.status_supported or st is None or at is None:
+            return None
+        build = (self.info.build if self.info is not None else None) or st.build_hex
+        return {
+            "build": build,
+            "mode": st.mode.name.lower(),
+            "seq": st.seq,
+            "status_age_ms": round((self._clock() - at) * 1000),
+            "uptime_ms": st.uptime_ms,
+            "max_duty": st.max_duty,
+            "levels": list(st.levels),
+        }
+
+    def _on_status(self, _sender: Any, data: bytes | bytearray) -> None:
+        """bleak notification callback (runs on the event loop)."""
+        try:
+            st = decode_belt_status(bytes(data))
+        except ProtocolError as exc:
+            if not self._bad_status_logged:
+                log.warning("ignoring malformed belt status: %s", exc)
+                self._bad_status_logged = True
+            return
+        first = self.status_health.last is None
+        self.status_health.on_status(st, self._clock(), self._window_s)
+        if first:
+            log.info("belt status: mode %s, build %s, max duty %d", st.mode.name.lower(), st.build_hex, st.max_duty)
 
     async def run(self) -> None:
         backoff = self.RECONNECT_DELAY_S
@@ -118,6 +189,7 @@ class BleBelt:
         writer = CommandWriter(
             lambda payload: client.write_gatt_char(BELT_COMMAND_UUID, payload, response=self.confirming),
             self.health, self.WRITE_TIMEOUT_S, self.MAX_WRITE_FAILURES, self._clock,
+            on_write=self.status_health.wrote,
         )  # fmt: skip
         self.health.reset(self._clock())
         self._writer = writer
@@ -152,26 +224,48 @@ class BleBelt:
                 raise TimeoutError(f"no {BELT_DEVICE_NAME} found")
         factory = self._client_factory or BleakClient
         client = factory(target, disconnected_callback=lambda _: self._disconnected.set())
+        self.status_health.reset()
+        self.status_supported = False
+        self.info = None
         try:
             await client.connect()
-            info = await client.read_gatt_char(BELT_INFO_UUID)
-            if len(info) < 2:
-                raise BleakError(f"belt info is {len(info)} bytes, expected [protocol_version, motor_count]")
+            try:
+                info = decode_belt_info(await client.read_gatt_char(BELT_INFO_UUID))
+            except ProtocolError as exc:
+                raise BleakError(str(exc)) from None
+            if _has_status(client):
+                self.status_supported = await self._subscribe_status(client)
         except BaseException:
             # The belt stops advertising while it's connected, so a client left open
             # here would keep the hub from ever finding it again.
             await self._disconnect_quietly(client)
             raise
-        version, motors = info[:2]
-        if motors != self.expected_motors:
-            log.warning("belt reports %d motors but the hub expects %d", motors, self.expected_motors)
+        self.info = info
+        if info.motors != self.expected_motors:
+            log.warning("belt reports %d motors but the hub expects %d", info.motors, self.expected_motors)
         self.confirming = _supports_write_with_response(client) is not False
         if not self.confirming:
             log.warning("belt command characteristic has no write-with-response: lost writes can't be detected")
-        log.info("belt connected (%s, protocol v%d, %d motors)", client.address, version, motors)
+        if not self.status_supported:
+            log.info("belt has no status characteristic (older firmware): relying on write acknowledgements")
+        log.info(
+            "belt connected (%s, protocol v%d, %d motors, build %s)",
+            client.address, info.version, info.motors, info.build or "unknown",
+        )  # fmt: skip
         self._client = client
         self._state = "connected"
         return client
+
+    async def _subscribe_status(self, client: Any) -> bool:
+        """Reads the status once and subscribes to it. A failure here falls back to
+        the write acknowledgement alone rather than refusing a working belt."""
+        try:
+            await client.start_notify(BELT_STATUS_UUID, self._on_status)
+            self._on_status(None, await client.read_gatt_char(BELT_STATUS_UUID))
+        except Exception as exc:  # noqa: BLE001 - see docstring
+            log.warning("couldn't subscribe to belt status (%s): relying on write acknowledgements", str(exc) or type(exc).__name__)
+            return False
+        return True
 
     async def _disconnect_quietly(self, client: Any) -> None:
         try:

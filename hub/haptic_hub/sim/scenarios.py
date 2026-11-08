@@ -32,7 +32,7 @@ ALL = (0, 1, 2, 3, 4)
 @dataclass(frozen=True)
 class Fault:
     kind: str  # camera_freeze | phone_disconnect | garbage | latency | perception_crash |
-    #            perception_stall | belt_drop | belt_disconnect
+    #            perception_stall | belt_drop | belt_unapplied | belt_disconnect
     start: float
     end: float
     value: float = 0.0
@@ -243,6 +243,23 @@ def _scenarios() -> list[Scenario]:
          c.recovers_within(3.5, 0.6), c.motors_on(2, 4.3, 5.5), c.status_reports(4.5, 5.5, healthy=True, min_frac=1.0),
          c.counter("belt_reconnects", lambda n: n >= 1, ">= 1")],
         [Fault("belt_drop", 2.5, 3.5)], fault,
+    ))  # fmt: skip
+    # Writes acknowledged but never applied: the write-ack check can't see this.
+    # The firmware's TTL lapses, its status notification (sent on the mode change)
+    # says "expired", and the hub reports it within one TTL + notify latency + a
+    # belt-loop tick + one status period. No reconnect: the link itself is fine.
+    s.append(Scenario(
+        "belt_not_applying", "Pole ahead; for 1 s the belt's BLE stack acknowledges every write but the firmware "
+        "never applies them (event queue full / main loop stalled). The firmware TTL plays the fault pattern; "
+        "only its status notifications show it. The hub must report 'belt TTL expired' and recover.", 5.5,
+        _pole_ahead(),
+        [c.motors_on(2, 1.0, 2.4), c.fault_within(2.5, ttl_s + belt_period + 0.05), c.fault_during(2.9, 3.5),
+         c.status_unhealthy_within(2.5, ttl_s + belt_period + status_period + 0.15, "belt TTL expired"),
+         c.status_reports(2.5 + ttl_s + belt_period + status_period + 0.15, 3.5, healthy=False, min_frac=1.0),
+         c.recovers_within(3.5, 0.6), c.motors_on(2, 4.3, 5.5), c.status_reports(4.5, 5.5, healthy=True, min_frac=1.0),
+         c.counter("belt_writes_unapplied", lambda n: n >= 10, ">= 10"),
+         c.counter("belt_reconnects", lambda n: n == 0, "== 0")],
+        [Fault("belt_unapplied", 2.5, 3.5)], fault,
     ))  # fmt: skip
     s.append(Scenario(
         "belt_disconnect", "Pole ahead; the BLE link drops for 1 s; the hub reconnects.", 5.5,

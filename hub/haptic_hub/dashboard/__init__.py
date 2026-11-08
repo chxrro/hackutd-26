@@ -31,7 +31,12 @@ from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
 
-from haptic_hub.belt.confirm import NOT_ACKNOWLEDGING_REASON
+from haptic_hub.belt.confirm import (
+    BELT_STATUS_REASONS,
+    FAULT_PATTERN_REASON,
+    NOT_ACKNOWLEDGING_REASON,
+    STATUS_STALE_REASON,
+)
 from haptic_hub.control import (
     ALERT_RANGES,
     BELT_TEST_REASON,
@@ -96,6 +101,14 @@ def banner(status: dict[str, Any]) -> dict[str, str]:
         if reason == NOT_ACKNOWLEDGING_REASON:
             detail = ("The belt is not confirming the hub's commands. It may be playing the fault pattern, "
                       "or nothing. Do not rely on it." + (" Alerts are paused too." if paused else ""))
+        elif reason in BELT_STATUS_REASONS:
+            if reason == STATUS_STALE_REASON:
+                what = "The belt has stopped reporting its status, so the hub can't tell what it is doing."
+            elif reason == FAULT_PATTERN_REASON:
+                what = "The belt reports it is playing the fault pattern, although the hub didn't ask for it."
+            else:
+                what = "The belt reports it is not following the hub's commands. It plays the fault pattern, or nothing."
+            detail = what + " Do not rely on it." + (" Alerts are paused too." if paused else "")
         elif belt_link_reason(belt) == reason:
             detail = "Commands are not reaching the belt." + (" Alerts are paused too." if paused else "")
         elif paused:
@@ -251,7 +264,12 @@ class Dashboard:
             "status": status,
             "banner": banner(status),
             "source": source,
-            "belt": {"state": hub.belt.state, "simulated": hub.belt.state == "simulated"},
+            "belt": {
+                "state": hub.belt.state,
+                "simulated": hub.belt.state == "simulated",
+                "confirmed": status.get("belt_confirmed"),
+                "firmware": status.get("belt_firmware"),
+            },
             "perception": hub.perception.name,
             "classifier": classifier,
             "options": {

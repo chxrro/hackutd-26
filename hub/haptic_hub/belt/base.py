@@ -18,6 +18,11 @@ class Belt(Protocol):
         link is up (e.g. "belt not acknowledging"), else None. Optional: the hub
         treats a belt without this attribute as never reporting one."""
 
+    # Optional, like `fault` (getattr with a default of None):
+    #   confirmed -> "status" | "ack" | None   what confirms the belt follows the hub
+    #   firmware  -> dict | None               the belt's own last status report
+    # Both go into the status JSON (docs/protocol.md section 2).
+
     async def run(self) -> None:
         """Maintain the connection (reconnecting as needed) until cancelled."""
 

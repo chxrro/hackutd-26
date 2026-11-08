@@ -197,6 +197,7 @@ async def run_scenario(
             phone.faults.latency_s = active["latency"].value if "latency" in active else 0.0
             phone.faults.jitter_s = active["latency"].value / 2 if "latency" in active else 0.0
             belt.faults.drop_writes = "belt_drop" in active
+            belt.faults.drop_applied = "belt_unapplied" in active
             belt.faults.disconnected = "belt_disconnect" in active
             if oracle is not None:
                 oracle.fail = "injected model crash" if "perception_crash" in active else None
@@ -258,6 +259,8 @@ async def run_scenario(
         "belt_writes": belt.writes,
         "belt_writes_lost": belt.lost_writes,
         "belt_writes_rejected": belt.rejected,
+        "belt_writes_unapplied": belt.unapplied_writes,
+        "belt_status_notifications": belt.status_notifications,
         "belt_reconnects": belt.reconnects,
         "status_msgs": len(timeline.statuses),
         "traveled_m": round(world.traveled, 2),

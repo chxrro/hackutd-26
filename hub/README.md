@@ -29,7 +29,8 @@ haptic_hub/
                      alert range, classifier; pairing code (docs/protocol.md "Control")
   belt/              where commands go
     ble.py             the ESP32 over BLE (bleak); writes with response and reconnects
-    confirm.py         acknowledged-write tracking: "belt not acknowledging" after one TTL
+    confirm.py         acknowledged-write tracking: "belt not acknowledging" after one TTL;
+                       belt status checks ("belt TTL expired", ...; docs/protocol.md "Status")
     sim.py             simulator
   viz.py             --show debug window (render() also draws the dashboard preview)
   dashboard/         --dashboard: operator page on http://127.0.0.1:8780/ (plain HTML/JS)

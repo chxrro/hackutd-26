@@ -166,6 +166,10 @@ def test_preview_without_result_is_the_raw_frame():
         ({"reason": "belt disconnected", "paused": False, "belt": "disconnected"}, "fault", "FAULT: belt disconnected"),
         ({"reason": "belt not acknowledging", "paused": False, "belt": "connected"}, "fault", "FAULT: belt not acknowledging"),
         ({"reason": "belt not acknowledging", "paused": True, "belt": "connected"}, "fault", "FAULT: belt not acknowledging"),
+        ({"reason": "belt TTL expired", "paused": False, "belt": "connected"}, "fault", "FAULT: belt TTL expired"),
+        ({"reason": "belt playing fault pattern", "paused": True, "belt": "connected"}, "fault", "FAULT: belt playing fault pattern"),
+        ({"reason": "belt not applying commands", "paused": False, "belt": "connected"}, "fault", "FAULT: belt not applying commands"),
+        ({"reason": "belt status stale", "paused": False, "belt": "connected"}, "fault", "FAULT: belt status stale"),
     ],
 )
 def test_banner(status, level, title):

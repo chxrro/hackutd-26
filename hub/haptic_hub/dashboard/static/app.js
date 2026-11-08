@@ -144,6 +144,21 @@ function render(state) {
   $("paired").textContent = String(state.pairing.paired_phones);
 }
 
+const CONFIRMED = {
+  status: "the belt's status confirms it applied a recent command",
+  ack: "writes acknowledged by the belt's Bluetooth stack only",
+};
+
+function describeFirmware(belt) {
+  const fw = belt.firmware;
+  const confirmed = belt.confirmed ? `Confirmed: ${CONFIRMED[belt.confirmed] || belt.confirmed}.` : "Not confirmed.";
+  if (!fw) {
+    return belt.state === "connected" ? `Firmware status: not reported (older firmware). ${confirmed}` : "Firmware status: –";
+  }
+  return `Firmware ${fw.build || "build unknown"}: belt says ${fw.mode.toUpperCase()}, ` +
+    `max duty ${fw.max_duty}, status ${fw.status_age_ms} ms old. ${confirmed}`;
+}
+
 function renderBelt(state) {
   const s = state.status;
   const mode = $("mode");
@@ -152,6 +167,7 @@ function renderBelt(state) {
   $("belt-state").textContent = state.belt.simulated
     ? "Simulated belt: nothing physical vibrates."
     : `Bluetooth belt: ${state.belt.state}.`;
+  $("belt-firmware").textContent = describeFirmware(state.belt);
 
   const list = $("motors");
   list.dataset.mode = s.mode;

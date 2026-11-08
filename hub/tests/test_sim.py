@@ -2,12 +2,13 @@
 real hub, and the real belt firmware logic built for the host. No glasses,
 phone, BLE radio or motors are involved.
 
-By default a fast subset of scenarios runs (~25 s). HUB_SIM_ALL=1 runs every
+By default a fast subset of scenarios runs (~30 s). HUB_SIM_ALL=1 runs every
 gating scenario (~2.5 min); `python -m haptic_hub.sim --probes` also runs the
 limitation probes.
 """
 
 import asyncio
+import contextlib
 import math
 import os
 
@@ -49,6 +50,72 @@ def test_firmware_shim_link_lost_then_dormant():
     assert fw.update(10 + 30000)[0] == firmware.FirmwareState.DORMANT  # bounded fault alert
 
 
+@needs_firmware
+def test_firmware_shim_status_matches_the_protocol_and_notifies_on_mode_change():
+    from haptic_hub.protocol import BeltFirmwareMode, decode_belt_status
+
+    fw = firmware.BeltFirmware(5)
+    fw.update(0)
+    assert fw.status_due(0)  # the first status goes out at once
+    assert not fw.status_due(100)
+    fw.on_payload(GOLDEN, 1000)
+    fw.update(1040)
+    assert fw.status_due(1040)  # idle -> levels: immediately, not at the next period
+    st = decode_belt_status(fw.status(1040, build_id=0x1A2B3C4D, max_duty=200))
+    assert (st.mode, st.seq, st.command_age_ms, st.uptime_ms) == (BeltFirmwareMode.LEVELS, 7, 40, 1040)
+    assert (st.build_id, st.max_duty, st.levels) == (0x1A2B3C4D, 200, (0, 64, 128, 192, 255))
+    assert not fw.status_due(1100)
+    fw.update(1250)  # TTL lapsed
+    assert fw.status_due(1250)
+    assert decode_belt_status(fw.status(1250)).mode == BeltFirmwareMode.EXPIRED
+    fw.update(1500)
+    assert fw.status_due(1500)  # periodic, 250 ms after the last one
+
+
+@needs_firmware
+def test_emulated_old_firmware_falls_back_to_write_acks():
+    """A belt without the status characteristic still works; the hub just can't
+    confirm beyond the write acknowledgement."""
+    from haptic_hub.protocol import BeltCommand
+
+    async def scenario():
+        belt = firmware.EmulatedBelt(5, status_characteristic=False)
+        task = asyncio.create_task(belt.run())
+        for _ in range(60):
+            await belt.send(BeltCommand.off(5))
+            await asyncio.sleep(1 / 15)
+        out = (belt.state, belt.fault, belt.confirmed, belt.firmware, belt.status_notifications)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        return out
+
+    state, fault, confirmed, fw, notes = asyncio.run(scenario())
+    assert (state, fault, confirmed, fw, notes) == ("connected", None, "ack", None, 0)
+
+
+@needs_firmware
+def test_emulated_belt_confirms_by_status():
+    from haptic_hub.protocol import BeltCommand, BeltMode
+
+    async def scenario():
+        belt = firmware.EmulatedBelt(5)
+        task = asyncio.create_task(belt.run())
+        for _ in range(30):
+            await belt.send(BeltCommand(BeltMode.LEVELS, (0, 0, 120, 0, 0)))
+            await asyncio.sleep(1 / 15)
+        out = (belt.fault, belt.confirmed, belt.firmware)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        return out
+
+    fault, confirmed, fw = asyncio.run(scenario())
+    assert fault is None and confirmed == "status"
+    assert fw["mode"] == "levels" and fw["build"] == "sim" and fw["max_duty"] == 255 and fw["levels"] == [0, 0, 120, 0, 0]
+    assert fw["status_age_ms"] <= 500
+
+
 def test_renderer_depth_matches_geometry():
     cam = CameraModel()
     world = World([pole(0.0, 2.0, radius=0.1)], Walker())
@@ -79,7 +146,7 @@ def test_person_gets_a_box_and_walls_do_not():
     assert np.isfinite(r.depth).all()
 
 
-FAST = ["pole_left", "person_vs_pole", "camera_freeze", "belt_writes_lost"]
+FAST = ["pole_left", "person_vs_pole", "camera_freeze", "belt_writes_lost", "belt_not_applying"]
 GATING = [n for n, sc in SCENARIOS.items() if "probe" not in sc.tags]
 SELECTED = GATING if os.environ.get("HUB_SIM_ALL") else FAST
 
