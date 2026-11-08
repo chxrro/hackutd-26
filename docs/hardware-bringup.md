@@ -13,8 +13,10 @@ same firmware and hub commit**. If a step fails, fix it there. Don't skip ahead.
 > needs consent from everyone in view.
 
 Status of this document: written before any hardware test. The `haptic-hub
-bench` command was tested only against the simulated belt, a fake BLE client
-and a pseudo-terminal (`hub/tests/test_bench.py`). Nothing here has run on the
+bench` command was tested only in simulation (`hub/tests/test_bench.py`):
+against the real `esp32/lib/belt_core` logic compiled for the host (no radio,
+motors or serial), a Python model of the same TTL rules, a fake BLE client and
+a pseudo-terminal standing in for the serial port. Nothing here has run on the
 real belt, phone or glasses yet. Replace this paragraph with results once it
 has.
 
@@ -94,7 +96,7 @@ the bench can read its serial log.
 ```bash
 cd hub
 uv sync                                   # core only; no vision models needed here
-uv run haptic-hub bench --belt sim --yes  # ~30 s dry run: checks your install, nothing vibrates (exit 3 is expected)
+uv run haptic-hub bench --belt sim --yes  # ~30 s dry run against belt_core on the Mac; nothing vibrates (exit 3 is expected)
 uv run haptic-hub scan                    # the belt shows up, with RSSI
 uv run haptic-hub bench --serial /dev/cu.usbserial-10 --note "bench, belt v1, power bank A"
 ```

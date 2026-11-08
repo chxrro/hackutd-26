@@ -519,3 +519,46 @@ def test_full_flow_over_the_fake_ble_link(fake_ble):
     assert any("--serial" in n for n in checks["ttl"]["notes"])
     assert checks["connect"]["data"]["rssi"] == -48
     assert len(fake_ble.made) == 2, "fault-disconnect drops the link, reconnect opens a new one"
+
+
+# ---------------------------------------------------------------- sim backed by the real belt_core
+
+
+def _firmware_link(motors=5):
+    from haptic_hub.sim.firmware import FirmwareUnavailable
+
+    try:
+        return links.FirmwareSimLink(motors)
+    except FirmwareUnavailable as exc:
+        pytest.skip(f"belt_core emulation unavailable: {exc}")
+
+
+def test_full_flow_against_the_real_belt_core_logic():
+    link = _firmware_link()
+    report = run(link, ScriptedOperator(), fast())
+    checks = by_name(report)
+    assert all(c["status"] == "pass" for c in checks.values()), render_summary(report)
+    assert "belt_core" in report["observer"]
+    for r in checks["ttl"]["data"]["runs"]:
+        # firmware loop ticks every 5 ms; allow scheduler jitter on a loaded CI box
+        assert r["effective_ttl_ms"] - 5 <= r["observed_link_lost_ms"] <= r["effective_ttl_ms"] + 60, r
+    assert link.rejected == 0, "the firmware decoder accepted every bench command"
+    states = [e.value for e in link.observer.events if e.kind == "state"]
+    assert states[0] == "active" and "link-lost" in states
+
+
+def test_real_belt_core_clamps_a_too_short_ttl():
+    report = run(_firmware_link(), ScriptedOperator(), fast(only=frozenset({"ttl"}), ttls_ms=(10,)))
+    r = by_name(report)["ttl"]["data"]["runs"][0]
+    assert r["effective_ttl_ms"] == 50 and 45 <= r["observed_link_lost_ms"] <= 120
+
+
+def test_sim_falls_back_to_the_python_model_without_a_compiler(monkeypatch):
+    import haptic_hub.sim.firmware as firmware
+
+    def unavailable(motors):
+        raise firmware.FirmwareUnavailable("no C++ compiler found (set CXX)")
+
+    monkeypatch.setattr(firmware, "BeltFirmware", unavailable)
+    link, warning = links.make_sim_link(5)
+    assert isinstance(link, SimBenchLink) and "Python TTL model" in warning

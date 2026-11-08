@@ -2,14 +2,15 @@
 
 `BleBenchLink` uses the same bleak client, UUIDs, belt filter and info check as
 `belt/ble.py`, but without its background reconnect loop: the bench needs to
-drop and re-open the link on purpose and time each write. `SimBenchLink` sends
-through `SimBelt` (so the wire format is round-tripped) and runs a small model of
-the firmware's TTL / link-lost timing, so the whole flow can run in CI.
+drop and re-open the link on purpose and time each write.
 
-The firmware model is a copy of the rules in esp32/lib/belt_core
-(haptic_controller.cpp) and docs/protocol.md "Belt failsafe behavior". It
-exercises the bench, not the board: a pass against it says nothing about the
-real belt.
+`--belt sim` uses `FirmwareSimLink` when a C++ compiler is available: the real
+esp32/lib/belt_core decoder and TTL/fault state machine, compiled for the host
+by `haptic_hub.sim.firmware`, ticked every 5 ms like main.cpp's loop, reporting
+the same state-change lines the serial log prints. Without a compiler it falls
+back to `SimBenchLink`: `SimBelt` plus a small Python copy of the TTL rules
+(docs/protocol.md "Belt failsafe behavior"). Both exercise the bench, not the
+board: a pass against either says nothing about the real belt.
 """
 
 from __future__ import annotations
@@ -334,3 +335,116 @@ class SimBenchLink:
             await self.write(BeltCommand.off(self.motors, ttl_ms=FIRMWARE_MIN_TTL_MS))
         await self.disconnect()
         self.firmware.shutdown()
+
+
+# ---------------------------------------------------------------- simulator, real belt_core
+
+_STATE_NAMES = {0: "idle", 1: "active", 2: "link-lost", 3: "dormant"}  # haptic_controller.cpp toString()
+FIRMWARE_LOOP_S = 0.005  # esp32/src/main.cpp loop() delay
+
+
+class FirmwareSimLink:
+    """The bench's sim belt backed by the real belt_core logic. Raises
+    haptic_hub.sim.firmware.FirmwareUnavailable if it can't be built."""
+
+    kind = "sim"
+    simulated = True
+
+    def __init__(self, motors: int, reported_motors: int | None = None) -> None:
+        from haptic_hub.sim.firmware import BeltFirmware
+
+        self.fw = BeltFirmware(motors)
+        self.motors = motors
+        self.reported_motors = self.fw.motors if reported_motors is None else reported_motors
+        self.observer = EventLog("esp32/lib/belt_core compiled for the host (real TTL/fault logic; no radio, motors or serial)")
+        self.writes = 0
+        self.rejected = 0
+        self.last: BeltCommand | None = None
+        self._t0 = time.monotonic()
+        self._state = "idle"
+        self._connected = False
+        self._seq = 0
+        self._loop_task: asyncio.Task | None = None
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
+
+    def _now_ms(self) -> int:
+        return int((time.monotonic() - self._t0) * 1000)
+
+    def _emit(self, kind: str, value: str | None, line: str) -> None:
+        self.observer.add(ObservedEvent(time.monotonic(), kind, value, line))
+
+    def tick(self) -> None:
+        state, _levels = self.fw.update(self._now_ms())
+        name = _STATE_NAMES.get(int(state), str(int(state)))
+        if name != self._state:
+            self._state = name
+            self._emit("state", name, f"[belt] state -> {name}")
+
+    async def _run(self) -> None:
+        while True:
+            self.tick()
+            await asyncio.sleep(FIRMWARE_LOOP_S)
+
+    async def connect(self, timeout: float = 10.0) -> ConnectInfo:
+        started = time.monotonic()
+        if self._loop_task is None or self._loop_task.done():
+            self._loop_task = asyncio.create_task(self._run())
+        self._connected = True
+        self._emit("connected", None, "[ble] hub connected")
+        info = bytes([BELT_PROTOCOL_VERSION, self.reported_motors])
+        return ConnectInfo(
+            address="sim",
+            name=f"{BELT_DEVICE_NAME} (simulated, belt_core)",
+            rssi=None,
+            scan_s=None,
+            connect_s=time.monotonic() - started,
+            info_hex=info.hex(" "),
+            protocol_version=info[0],
+            motor_count=info[1],
+        )
+
+    async def write(self, cmd: BeltCommand, response: bool = False) -> None:
+        if not self._connected:
+            raise BenchLinkError("belt not connected")
+        self._seq = (self._seq + 1) & 0xFF
+        payload = encode_belt_command(cmd, self._seq)
+        err = self.fw.on_payload(payload, self._now_ms())
+        self.writes += 1
+        self.last = cmd
+        if err != 0:
+            self.rejected += 1
+            self._emit("rejected", f"error {err}, {len(payload)} bytes", f"[ble] rejected command (error {err}, {len(payload)} bytes)")
+        await asyncio.sleep(0)
+
+    async def disconnect(self) -> None:
+        if self._connected:
+            self._connected = False
+            self._emit("disconnected", None, "[ble] hub disconnected")
+            self.fw.on_link_lost(self._now_ms())
+
+    async def close(self) -> None:
+        if self._connected:
+            await self.write(BeltCommand.off(self.motors, ttl_ms=FIRMWARE_MIN_TTL_MS))
+        await self.disconnect()
+        self.tick()
+        if self._loop_task is not None:
+            self._loop_task.cancel()
+            try:
+                await self._loop_task
+            except asyncio.CancelledError:
+                pass
+            self._loop_task = None
+
+
+def make_sim_link(motors: int) -> tuple[FirmwareSimLink | SimBenchLink, str | None]:
+    """The best available sim belt, and a warning if it had to fall back."""
+    from haptic_hub.sim.firmware import FirmwareUnavailable
+
+    try:
+        return FirmwareSimLink(motors), None
+    except FirmwareUnavailable as exc:
+        first = str(exc).splitlines()[0]
+        return SimBenchLink(motors), f"belt_core emulation unavailable ({first}); using the Python TTL model instead"

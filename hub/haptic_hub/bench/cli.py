@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from haptic_hub.bench.flow import SELECTABLE, AutoOperator, Bench, BenchSettings, ConsoleOperator, Operator
-from haptic_hub.bench.links import BleBenchLink, EventLog, SimBenchLink
+from haptic_hub.bench.links import BleBenchLink, EventLog, make_sim_link
 from haptic_hub.bench.report import DEFAULT_REPORT_DIR, SCHEMA, checks_to_json, exit_code, render_summary, verdict, write_report
 
 SAFETY_BANNER = (
@@ -164,8 +164,9 @@ async def run_bench(
 
 async def bench_command(args: argparse.Namespace) -> int:
     settings = settings_from_args(args)
+    warning = None
     if args.belt == "sim":
-        link: Any = SimBenchLink(settings.motors)
+        link, warning = make_sim_link(settings.motors)
         observer: EventLog | None = link.observer
         if args.serial:
             raise SystemExit("bench: --serial is for the real belt; the simulator has its own log")
@@ -179,7 +180,9 @@ async def bench_command(args: argparse.Namespace) -> int:
     operator: Operator = AutoOperator() if args.yes else ConsoleOperator()
     operator.say(SAFETY_BANNER)
     if link.simulated:
-        operator.say("SIMULATED BELT: nothing will vibrate.")
+        operator.say(f"SIMULATED BELT: nothing will vibrate. Belt logic: {observer.source if observer else '?'}")
+    if warning:
+        operator.say(f"warning: {warning}")
     try:
         report = await run_bench(link, operator, settings, observer, args.note, 0.0 if link.simulated else args.serial_settle_s)
     except OSError as exc:  # e.g. the serial port can't be opened

@@ -106,7 +106,9 @@ to see the TTL lapse. `--only motor-map` re-runs one check. `--yes` skips
 prompts and reports the checks that need a person as UNCONFIRMED. A summary
 table is printed and a JSON report goes to `hub/bench-reports/` (git-ignored).
 Exit code 0 PASS, 1 FAIL, 3 INCOMPLETE, 130 aborted. `--belt sim` runs the whole
-flow against the simulator (`tests/test_bench.py`). When to run it, pass
+flow against the real `esp32/lib/belt_core` logic compiled for the host (the
+`haptic_hub.sim.firmware` build; falls back to a Python model of the TTL rules,
+with a warning, if there's no C++ compiler). Tests: `tests/test_bench.py`. When to run it, pass
 criteria and what to do on failure: [docs/hardware-bringup.md](../docs/hardware-bringup.md).
 
 ## Dashboard and remote control
