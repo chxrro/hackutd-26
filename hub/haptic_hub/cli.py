@@ -70,6 +70,9 @@ async def _run(args: argparse.Namespace) -> None:
         cfg.perception.depth_model = cfg.perception.depth_model.replace("Indoor", "Outdoor")
     if args.device:
         cfg.perception.device = args.device
+    cfg.perception.motion = args.motion
+    if args.motion == "flow" and args.perception not in ("vision", "detector"):
+        raise SystemExit("--motion flow needs the detector's tracked boxes: use --perception vision or detector")
 
     source = _make_source(args.source, cfg)
     if args.source == "glasses":
@@ -246,6 +249,12 @@ def main() -> None:
         help="glasses (default), webcam[:N], video:PATH, or stream:URL (rtsp://, http:// MJPEG, ...)",
     )
     run.add_argument("--perception", default="vision", choices=["vision", "depth", "detector", "sweep"])
+    run.add_argument(
+        "--motion",
+        default="off",
+        choices=["off", "flow"],
+        help="flow: also raise risk from optical-flow approach/crossing of tracked boxes (experimental)",
+    )
     run.add_argument("--belt", default="ble", choices=["ble", "sim"])
     run.add_argument("--belt-address", help="skip scanning and connect to this BLE address/UUID")
     run.add_argument("--port", type=int, default=8765, help="WebSocket port for the phone")

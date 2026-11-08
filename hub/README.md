@@ -67,7 +67,8 @@ uv run haptic-hub belt-test
 ```
 
 Options: `--perception depth|detector` runs one model only (faster),
-`--outdoor` uses the outdoor depth model, `--device mps|cuda|cpu`.
+`--outdoor` uses the outdoor depth model, `--device mps|cuda|cpu`,
+`--motion flow` adds optical-flow approach/crossing (experimental, below).
 
 macOS asks for Bluetooth permission (for BLE) and camera permission (for
 `--source webcam`) for your terminal app the first time.
@@ -167,7 +168,8 @@ delete it.
 2. **Tracked objects** (things coming at you): YOLO + ByteTrack keep an ID
    per object. TTC ≈ box height / growth rate, fitted over 0.6 s. Risk is 0
    above 3 s and 1 below 1 s, applied to every strip the box covers.
-3. **Fusion**: sector risk = max(depth risk, TTC risk).
+3. **Fusion**: sector risk = max(depth risk, TTC risk), plus flow risk with
+   `--motion flow` (below).
 4. **Policy**: rising risk applies instantly, falling risk fades, values
    below the deadband are ignored, then mapped to PWM 90–255.
 5. **Safety**: no frames for 1 s, no result for 1.5 s, a result computed
@@ -176,6 +178,35 @@ delete it.
 
 All thresholds are in `haptic_hub/config.py`. None of them have been
 validated yet; measure against a tape measure and tune.
+
+## Optical-flow motion (`--motion flow`, experimental, off by default)
+
+`perception/flow.py` wraps the detector perception (`vision` or `detector`;
+other modes refuse the flag). Adapted from Nathan's NVIDIA webcam experiment
+(`scripts/visual_motion.py`, PR #3). For each tracked box it fits a similarity
+transform to sparse Lucas-Kanade flow between the current frame and one
+~0.15 s older:
+
+- **Approach**: the fitted scale *s* over *dt* gives TTC ≈ dt / ln(s), median
+  over 0.6 s. It goes through the same 1–3 s risk curve as box-growth TTC.
+  It is camera-relative, so walking toward a still pole counts.
+- **Crossing**: the box's horizontal motion minus the background's motion at
+  the same point, so a head turn is not a crossing. If a near box (≥ 25 % of
+  the frame height) moving ≥ 0.1 frame widths/s would sweep into the middle
+  band (35–65 % of the width) within 1 s, every sector it sweeps gets risk 0.5.
+  A vibration still means an obstacle in that direction, not "move".
+
+Flow only **raises** sector risk (max-merge). A box with too little texture, a
+new track, or no reference frame of the right age adds nothing. A failure
+raises, so the belt plays the fault pattern. Settings are in `FlowConfig`.
+
+Measured on synthetic scenes (`tests/test_flow.py`), not real footage: TTC
+within 25 % on a scripted approach; a head pan is not reported as crossing;
+LK tracking failed beyond ~25 px of shift per frame pair, which is why the
+reference frame is ~0.15 s old. Cost: median ~3 ms/frame with 1 box and
+~6 ms with 5 boxes at 384 px on an M4 Max CPU. Real-camera accuracy and
+thresholds are not validated; tune on replayed clips
+(`--source video:walk.mp4 --belt sim --show --motion flow`).
 
 ## Known limitations
 
