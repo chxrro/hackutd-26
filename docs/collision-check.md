@@ -82,6 +82,14 @@ can miss or mislocalize objects; the four-object budget can omit hazards. Drop-o
 transparent/reflective objects and real-body clearance are not solved. No alert is
 proof of safe passage, and no motor commands are generated.
 
+A lost hazard (a possible-collision track that disappears) stays `UNKNOWN —
+previous hazard is no longer visible` only while its track survives the
+five-second history gap. After that, if the other objects look still, receding or
+off-path, the result returns to `NO APPARENT COLLISION DETECTED`. An approaching
+person often disappears because they fill the frame, so this can report "no
+apparent collision" with someone directly ahead. Tracks that vanish before ever
+being a candidate do not trigger `lost_track` at all. Treat this as a known gap.
+
 A response older than the existing three-second freshness limit is saved as
 unknown, retaining its candidate state as historical evidence. The page also
 expires a previously recent assessment to unknown as time passes or inference

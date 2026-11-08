@@ -100,7 +100,8 @@ def infer_vision(base_url,model,frames):
         if choice.get('finish_reason')!='stop':
             raise ValueError('Incomplete collision response')
         parsed=parse_vision(choice['message']['content'])
-    except (ValueError,TypeError,KeyError,IndexError):
+    except (ValueError,TypeError,KeyError,IndexError,AttributeError):
+        # AttributeError: vLLM can return content null.
         error='invalid_model_output'
     return {'model':model,'request_latency_ms':round((time.monotonic()-started)*1000),
         'usage':result.get('usage'),'vision':parsed,'vision_error':error,'input_format':'image'}

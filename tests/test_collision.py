@@ -141,7 +141,7 @@ class CollisionProtocolTests(unittest.TestCase):
             parse_vision('Here is a scene ["Circle", <0><0><800><800>]')
 
     def test_malformed_or_truncated_response_is_unknown_without_raw_prose(self):
-        for response in (self.response('Descriptive scene prose'), self.response('{}',finish='length')):
+        for response in (self.response('Descriptive scene prose'), self.response('{}',finish='length'), self.response(None)):
             with patch('collision.request_json',return_value=response):
                 result=infer_vision('unused','cosmos3-edge',[frame(1)])
             self.assertIsNone(result['vision'])

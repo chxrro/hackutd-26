@@ -14,6 +14,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+from http.client import HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -25,12 +26,24 @@ from collision import CollisionEngine, summary as collision_summary
 
 INSTANCE = 'hackutd-reasoner'
 REMOTE_DIR = '/home/ubuntu/workspace/hackutd-26/reasoner'
-BASE_URL = 'http://127.0.0.1:8000/v1'
+# Local ports avoid the hub: 8765 is its glasses WebSocket, and 8000 is the
+# hub's documented port-forward for its cloud classifier. The VM side stays 8000.
+TUNNEL_PORT = 8001
+PAGE_PORT = 8770
+BASE_URL = f'http://127.0.0.1:{TUNNEL_PORT}/v1'
 SESSION_SECONDS = 20 * 60
 COMPUTE_HOURLY = 1.4544  # Recorded allocation price, not a live billing query.
 MAX_BODY = 700_000
 MAX_FRAME_AGE_SECONDS = 3.0  # Prototype freshness limit, not a safety threshold.
 RATE_WINDOW_SECONDS = 10.0
+STOP_RETRY_SECONDS = 30.0
+# Transport-level failures that are worth retrying with a fresh frame.
+TRANSIENT_ERRORS = (URLError, TimeoutError, ConnectionError, HTTPException, json.JSONDecodeError)
+
+
+def instance_row(listing: str) -> list[str]:
+    """Columns of the `brev ls` row whose first column is exactly INSTANCE."""
+    return next((line.split() for line in listing.splitlines() if line.split()[:1] == [INSTANCE]), [])
 
 
 def decode_frame(payload: dict) -> str:
@@ -123,7 +136,7 @@ class Session:
             'ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
             '-o', 'ControlMaster=no', '-o', 'ControlPath=none',
             '-o', 'ExitOnForwardFailure=yes', '-N',
-            '-L', '127.0.0.1:8000:127.0.0.1:8000', INSTANCE,
+            '-L', f'127.0.0.1:{TUNNEL_PORT}:127.0.0.1:8000', INSTANCE,
         ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
 
@@ -211,27 +224,37 @@ class Session:
             self.stage, self.status = stage, status
 
     def watchdog(self):
+        """Stop at the deadline, then keep retrying a failed shutdown until Brev
+        confirms STOPPED, so a closed page cannot leave a failed stop unattended."""
         while not self.cancelled.wait(1):
             if time.time() >= self.deadline:
                 self.stop()
+                break
+        while True:
+            with self.lock:
+                finished, stopping = self.finished, self.stop_started
+                failed = self.stage == 'stop-error' and not stopping
+            if finished or not (failed or stopping):
                 return
+            if failed:
+                self.stop()
+            else:
+                time.sleep(STOP_RETRY_SECONDS)
 
     def prepare(self):
         self.update('starting', 'Starting the GPU. The 20-minute timer includes startup.')
         with self.launch_lock:
             if self.cancelled.is_set():
                 return
-            listing = self.command('ls', timeout=20)
-            row = next((line for line in listing.splitlines() if line.split() and line.split()[0] == INSTANCE), '')
-            while 'STOPPING' in row.split():
+            row = instance_row(self.command('ls', timeout=20))
+            while 'STOPPING' in row:
                 self.update('waiting', 'Waiting for the previous GPU shutdown before restarting.')
                 if self.cancelled.wait(5):
                     return
                 if time.time() >= self.deadline - 120:
                     raise RuntimeError('Previous GPU shutdown did not finish before the session deadline.')
-                listing = self.command('ls', timeout=20)
-                row = next((line for line in listing.splitlines() if line.split() and line.split()[0] == INSTANCE), '')
-            if not any(status in row.split() for status in ('RUNNING', 'STARTING')):
+                row = instance_row(self.command('ls', timeout=20))
+            if not any(status in row for status in ('RUNNING', 'STARTING')):
                 self.command('start', INSTANCE, '--detached', timeout=30)
         # Brev may return before SSH becomes ready.
         while not self.cancelled.is_set() and time.time() < self.deadline - 90:
@@ -260,7 +283,11 @@ class Session:
         if self.cancelled.is_set():
             return
         self.update('connecting', 'Connecting the private model tunnel.')
-        self.start_tunnel()
+        with self.condition:
+            # Under the lock stop() uses, so a concurrent stop always sees the tunnel.
+            if self.cancelled.is_set():
+                return
+            self.start_tunnel()
         while not self.cancelled.is_set() and time.time() < self.deadline - 60:
             if self.tunnel is not None and self.tunnel.poll() is not None:
                 detail = self.tunnel.stderr.read().decode(errors='replace')[-600:]
@@ -299,7 +326,7 @@ class Session:
                 try:
                     result = (self.collision_engine.analyze(BASE_URL, self.model, frame)
                               if self.collision_engine else interpret_image(BASE_URL, self.model, frame.image))
-                except (URLError, TimeoutError, ConnectionError) as error:
+                except TRANSIENT_ERRORS as error:
                     if isinstance(error, HTTPError) and error.code not in {408, 429, 500, 502, 503, 504}:
                         raise
                     with self.condition:
@@ -376,9 +403,7 @@ class Session:
                 except (RuntimeError, subprocess.TimeoutExpired):
                     pass  # The VM timer may already have stopped it; verify below.
             for attempt in range(60):
-                listing = self.command('ls', timeout=20)
-                row = next((line for line in listing.splitlines() if INSTANCE in line), '')
-                if 'STOPPED' in row:
+                if 'STOPPED' in instance_row(self.command('ls', timeout=20)):
                     with self.lock:
                         self.finished = True
                         self.ended_at = time.time()
@@ -512,7 +537,7 @@ def make_handler(session, token):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--port', type=int, default=8765)
+    parser.add_argument('--port', type=int, default=PAGE_PORT)
     parser.add_argument('--sessions-dir', type=Path, default=DEFAULT_SESSIONS_DIR,
                         help='Private numbered recording folders (JPEGs, JSONL, observations)')
     parser.add_argument('--analysis-log', type=Path,
@@ -531,7 +556,10 @@ def main():
     server = ThreadingHTTPServer(('127.0.0.1', args.port), make_handler(host, secrets.token_urlsafe(32)))
     def interrupt(*_):
         raise KeyboardInterrupt
+    # Closing the terminal (SIGHUP) must also request a GPU stop.
     signal.signal(signal.SIGTERM, interrupt)
+    if hasattr(signal, 'SIGHUP'):
+        signal.signal(signal.SIGHUP, interrupt)
     print(f'Camera test: http://127.0.0.1:{server.server_port}', flush=True)
     print(f'Session recording: {host.current.analysis_log.path}', flush=True)
     print('Preview is local. Start live or Analyze starts a 20-minute GPU session (~$0.49 compute + storage).', flush=True)

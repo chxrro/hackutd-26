@@ -85,7 +85,7 @@ class SessionTests(unittest.TestCase):
             session.start_tunnel()
         args = popen.call_args.args[0]
         self.assertIn('ControlPath=none', args)
-        self.assertIn('127.0.0.1:8000:127.0.0.1:8000', args)
+        self.assertIn('127.0.0.1:8001:127.0.0.1:8000', args)
 
     def test_transient_inference_failure_continues_with_the_latest_frame(self):
         session = webcam.Session('/unused/brev')
@@ -269,6 +269,74 @@ class SessionTests(unittest.TestCase):
         session.completions.extend([now - 2.5, now - 1.25, now])
         self.assertEqual(session.snapshot()['processed_fps'], 0.8)
 
+
+
+    def test_watchdog_retries_a_failed_stop_until_confirmed(self):
+        session = webcam.Session('/unused/brev')
+        session.started, session.deadline = 1, 10**12
+        session.cancelled.set()
+        session.stage = 'stop-error'
+        def stop():
+            session.finished = True
+        with patch.object(session, 'stop', side_effect=stop) as stop_call:
+            session.watchdog()
+        stop_call.assert_called_once()
+
+    def test_watchdog_waits_for_an_in_progress_stop_without_starting_another(self):
+        session = webcam.Session('/unused/brev')
+        session.started, session.deadline = 1, 10**12
+        session.cancelled.set()
+        session.stop_started, session.stage = True, 'stopping'
+        def finish(_):
+            session.finished = True
+        with patch.object(session, 'stop') as stop, patch.object(webcam.time, 'sleep', side_effect=finish):
+            session.watchdog()
+        stop.assert_not_called()
+
+    def test_stop_matches_the_exact_instance_name(self):
+        session = webcam.Session('/unused/brev')
+        session.started = 1
+        listings = ['hackutd-reasoner-2 STOPPED\nhackutd-reasoner RUNNING', 'hackutd-reasoner STOPPED']
+        responses = iter(['stopping', *listings])
+        with patch.object(session, 'command', side_effect=lambda *a, **k: next(responses)) as command, patch.object(webcam.time, 'sleep'):
+            session.stop()
+        self.assertTrue(session.finished)
+        self.assertEqual([c.args[0] for c in command.call_args_list], ['stop', 'ls', 'ls'])
+
+    def test_stop_during_startup_never_leaves_a_tunnel_behind(self):
+        session = webcam.Session('/unused/brev')
+        session.deadline = time.time() + 300
+        original_update = session.update
+        def update(stage, status):
+            original_update(stage, status)
+            if stage == 'connecting':
+                session.cancelled.set()  # Stop lands after model loading, before the tunnel.
+        with patch.object(session, 'command', return_value='hackutd-reasoner RUNNING'), patch.object(session, 'update', side_effect=update), patch.object(session, 'start_tunnel') as tunnel:
+            session.prepare()
+        tunnel.assert_not_called()
+
+    def test_non_json_reply_is_a_temporary_failure_not_a_shutdown(self):
+        session = webcam.Session('/unused/brev')
+        session.model = 'cosmos3-edge'
+        session.pending = webcam.Frame(FRAME, time.time(), 1, 0)
+        session.worker_running = True
+        calls = []
+        def interpret(*args):
+            calls.append(args)
+            if len(calls) == 1:
+                session.pending = webcam.Frame(FRAME, time.time(), 2, 0)
+                raise json.JSONDecodeError('Expecting value', '<html>', 0)
+            session.cancelled.set()
+            return {'observation': 'Synthetic test obstacle', 'request_latency_ms': 1, 'model': session.model}
+        with patch.object(webcam, 'interpret_image', side_effect=interpret), patch.object(session.cancelled, 'wait', return_value=False), patch.object(session, 'stop') as stop:
+            session.process()
+        self.assertEqual(session.inference_failures, 1)
+        stop.assert_not_called()
+
+    def test_local_ports_avoid_the_hub(self):
+        self.assertNotIn(webcam.PAGE_PORT, {8765, 8000})
+        self.assertNotIn(webcam.TUNNEL_PORT, {8765, 8000})
+        self.assertIn(f':{webcam.TUNNEL_PORT}/', webcam.BASE_URL)
 
 
 class RequestTests(unittest.TestCase):

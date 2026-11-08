@@ -7,7 +7,7 @@ An accessibility prototype exploring Ray-Ban camera video and a vibration belt t
 - [Project context](docs/project-context.md): goals, initial status, open decisions, and proposed milestones.
 - [NVIDIA vision agent handoff](docs/agent-handoff.md): current implementation, setup, checks, and next steps.
 
-Brev-hosted Cosmos3-Edge image inference and a MacBook camera multi-frame test are verified. The camera-to-belt integration remains unverified. Read the project context for current status and limitations.
+Hardware and end-to-end camera-to-belt integration are not yet verified. Separately, the NVIDIA webcam experiment in `scripts/` (Brev-hosted Cosmos3-Edge image inference and a MacBook camera multi-frame test) is verified on its own. Read the project context for current status and limitations.
 
 ## NVIDIA reasoner setup
 
@@ -23,7 +23,7 @@ python3 -m venv .venv
 ```
 
 Open
-`http://127.0.0.1:8765` in Safari or Chrome. Camera preview is local.
+`http://127.0.0.1:8770` in Safari or Chrome. Camera preview is local.
 **Start live** samples once per second and shows actual analysis FPS. It or
 **Capture & analyze** starts a 20-minute GPU session (about $0.49 compute plus
 storage). **Pause live** leaves compute billable; use **Stop GPU & camera** when done.

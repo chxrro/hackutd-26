@@ -6,6 +6,9 @@ from pathlib import Path
 
 from session_recording import private_write
 
+# Repo-root paths, so running from another directory still lands in git-ignored /data/.
+CALIBRATION_DIR = Path(__file__).resolve().parents[1] / 'data' / 'calibration'
+
 
 def targets(folder):
     import cv2
@@ -70,11 +73,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
     target = commands.add_parser('targets')
-    target.add_argument('--output-dir', type=Path, default=Path('data/calibration/targets'))
+    target.add_argument('--output-dir', type=Path, default=CALIBRATION_DIR / 'targets')
     fit = commands.add_parser('fit')
     fit.add_argument('images', type=Path)
     fit.add_argument('--square-size-m', type=float, required=True)
-    fit.add_argument('--output', type=Path, default=Path('data/calibration/camera.json'))
+    fit.add_argument('--output', type=Path, default=CALIBRATION_DIR / 'camera.json')
     args = parser.parse_args()
     if args.command == 'targets':
         targets(args.output_dir)

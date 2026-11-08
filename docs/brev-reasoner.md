@@ -80,10 +80,11 @@ that the API is ready; wait for its health check to pass.
 
 ## Connect from the Mac
 
-Create the SSH tunnel from the Mac:
+Create the SSH tunnel from the Mac. The local end is 8001 because the hub's
+cloud classifier documents 8000 for its own port-forward; the VM side stays 8000:
 
 ```bash
-brev port-forward hackutd-reasoner -p 8000:8000
+brev port-forward hackutd-reasoner -p 8001:8000
 ```
 
 Then, from the project root:
@@ -111,7 +112,8 @@ python3 -m venv .venv
 .venv/bin/python scripts/webcam_reasoner.py
 ```
 
-Open `http://127.0.0.1:8765` in Safari or Chrome on the MacBook. Refresh an already
+Open `http://127.0.0.1:8770` in Safari or Chrome on the MacBook (moved from 8765,
+the hub's glasses WebSocket port). Refresh an already
 open page after updating/restarting the server, then click **Enable MacBook
 camera**, allow access, and select the built-in camera if needed. The shared T3
 preview reported camera permission denied during initial setup; use a browser
@@ -228,8 +230,11 @@ successful camera session reported `remote_shutdown_guard: true` and ended with
 The local watchdog also requests shutdown at the deadline and confirms cloud
 state. Keep the Mac awake during initial setup, before the VM timer is installed.
 
-Wait for `Brev confirmed STOPPED` before assuming compute has stopped. Interrupting
-the local server requests a stop. If shutdown reports an error:
+Wait for `Brev confirmed STOPPED` before assuming compute has stopped. Ctrl+C,
+SIGTERM, or closing the terminal (SIGHUP) requests a stop; a failed stop is retried
+every 30 s while the server runs. A hard kill, crash or Mac sleep before the VM timer
+is installed is not covered: the VM keeps running until stopped manually. If shutdown
+reports an error:
 
 ```bash
 brev stop hackutd-reasoner
@@ -261,7 +266,7 @@ FPS or collision safety.
 brev start hackutd-reasoner
 brev refresh
 brev exec hackutd-reasoner 'cd /home/ubuntu/workspace/hackutd-26/reasoner && bash start.sh'
-brev port-forward hackutd-reasoner -p 8000:8000
+brev port-forward hackutd-reasoner -p 8001:8000
 ```
 
 Container auto-restart is disabled so failed model loading cannot cause an
@@ -290,7 +295,7 @@ bash -n deploy/reasoner/start.sh
 - Remote runtime reported NVIDIA A10G (23,028 MiB), driver 595.112.07,
   Docker 29.9.3, and Compose v5.7.0.
 - Model: `cosmos3-edge`, served from the pinned NVIDIA Cosmos3-Edge checkpoint.
-- Local SSH tunnel listens on loopback port 8000. `/health` returned HTTP 200
+- Local SSH tunnel listened on loopback port 8000 at the time (now 8001). `/health` returned HTTP 200
   and `/v1/models` returned the expected model.
 - A single request using NVIDIA's example image returned:
   “Three vases of different colors and a flower are displayed on a robotic
