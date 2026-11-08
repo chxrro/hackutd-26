@@ -50,6 +50,13 @@ class HapticController {
   State state() const { return state_; }
   uint8_t motorCount() const { return motorCount_; }
 
+  // For the status characteristic (belt_status.h).
+  bool hasCommand() const { return hasCommand_; }  // a command was applied since boot / reset()
+  const Command& lastCommand() const { return current_; }
+  uint32_t commandAtMs() const { return commandAtMs_; }
+  bool lostByDisconnect() const { return lostByDisconnect_; }  // LinkLost/Dormant: BLE dropped, not TTL
+  const uint8_t* lastLevels() const { return lastLevels_; }  // what the last update() wrote
+
  private:
   bool faultPatternOn(uint32_t elapsedMs) const;
   void enterLinkLost(uint32_t nowMs);
@@ -61,6 +68,9 @@ class HapticController {
   uint32_t commandAtMs_ = 0;
   uint16_t ttlMs_ = 0;
   uint32_t faultSinceMs_ = 0;
+  bool hasCommand_ = false;
+  bool lostByDisconnect_ = false;
+  uint8_t lastLevels_[kMaxMotors] = {};
 };
 
 const char* toString(HapticController::State state);

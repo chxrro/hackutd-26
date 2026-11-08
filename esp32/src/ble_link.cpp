@@ -10,6 +10,7 @@
 namespace {
 
 constexpr UBaseType_t kQueueDepth = 8;
+constexpr size_t kMaxBuildStr = 16;  // docs/protocol.md: build id text is at most 16 bytes
 
 class ServerCallbacks : public NimBLEServerCallbacks {
  public:
@@ -52,7 +53,7 @@ class CommandCallbacks : public NimBLECharacteristicCallbacks {
 
 }  // namespace
 
-bool BleLink::begin(uint8_t motorCount) {
+bool BleLink::begin(uint8_t motorCount, const char* buildStr) {
   queue_ = xQueueCreate(kQueueDepth, sizeof(Event));
   if (queue_ == nullptr) return false;
 
@@ -69,8 +70,16 @@ bool BleLink::begin(uint8_t motorCount) {
   command->setCallbacks(new CommandCallbacks(*this));
 
   NimBLECharacteristic* info = service->createCharacteristic(cfg::kInfoUuid, NIMBLE_PROPERTY::READ);
-  const uint8_t infoValue[] = {belt::kProtocolVersion, motorCount};
-  info->setValue(infoValue, sizeof(infoValue));
+  uint8_t infoValue[2 + kMaxBuildStr] = {belt::kProtocolVersion, motorCount};
+  size_t infoLength = 2;
+  for (const char* p = buildStr; p != nullptr && *p != '\0' && infoLength < sizeof(infoValue); ++p)
+    infoValue[infoLength++] = static_cast<uint8_t>(*p);
+  info->setValue(infoValue, infoLength);
+
+  // NimBLE adds the CCCD (0x2902) for NOTIFY itself.
+  NimBLECharacteristic* status =
+      service->createCharacteristic(cfg::kStatusUuid, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  status_ = status;
 
   service->start();
 
@@ -78,6 +87,13 @@ bool BleLink::begin(uint8_t motorCount) {
   advertising->addServiceUUID(cfg::kServiceUuid);
   advertising->setScanResponse(true);
   return advertising->start();
+}
+
+void BleLink::publishStatus(const uint8_t* data, size_t length) {
+  if (status_ == nullptr) return;
+  auto* status = static_cast<NimBLECharacteristic*>(status_);
+  status->setValue(data, length);
+  status->notify();  // no-op without a subscribed client
 }
 
 void BleLink::push(const Event& ev) {
