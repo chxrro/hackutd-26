@@ -1,0 +1,4 @@
+# Webcam session recording (use a local virtual environment).
+Pillow>=11,<13
+# Local optical-flow motion measurements from NVIDIA object boxes.
+opencv-contrib-python-headless>=4.10,<5

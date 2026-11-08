@@ -5,8 +5,55 @@ An accessibility prototype exploring Ray-Ban camera video and a vibration belt t
 ## Project context
 - [Agent guide](AGENTS.md): instructions for agents working in this repository.
 - [Project context](docs/project-context.md): goals, initial status, open decisions, and proposed milestones.
+- [NVIDIA vision agent handoff](docs/agent-handoff.md): current implementation, setup, checks, and next steps.
 
-The project direction is documented; hardware and software integration are not yet verified. Read the context and current code before assuming a working implementation.
+Brev-hosted Cosmos3-Edge image inference and a MacBook camera multi-frame test are verified. The camera-to-belt integration remains unverified. Read the project context for current status and limitations.
+
+## NVIDIA reasoner setup
+
+See [Brev deployment and credit setup](docs/brev-reasoner.md) for the GPU instance,
+private API tunnel, image client, and commands to stop compute billing.
+
+For a MacBook webcam test, install the recording dependency and start the server:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python scripts/webcam_reasoner.py
+```
+
+Open
+`http://127.0.0.1:8765` in Safari or Chrome. Camera preview is local.
+**Start live** samples once per second and shows actual analysis FPS. It or
+**Capture & analyze** starts a 20-minute GPU session (about $0.49 compute plus
+storage). **Pause live** leaves compute billable; use **Stop GPU & camera** when done.
+Live resumes after tab switches and retries temporary connection/camera delays;
+the capture count shows when new frames are being sampled.
+Completed analyses now save ordinary JPEGs (at most 320×240), matching metadata,
+and observations in numbered `data/sessions/session_000001/` folders. Images are
+reduced **after** inference. Each server run creates a new session; pause/resume
+keeps its current folder. After a confirmed stop, click **New analysis session**
+to create the next folder and enable Live again without restarting Python.
+Enable the camera before clicking Live. Restarting the VM separately does not
+reset a finished local analysis session. Private recordings are excluded from Git and retained
+until you delete them. Prior text-only logs in `data/analysis/` are preserved.
+
+See [session recording and CPU perception](docs/session-recording.md) for the
+folder format, replay commands, calibration targets, and measurement checks.
+The live pipeline uses **NVIDIA Cosmos3-Edge for object vision** and measured
+OpenCV optical flow for camera-relative motion. Output is now a short possible
+collision / no apparent collision / unknown assessment, with per-object candidate
+IDs and motion evidence in the saved metadata. See [the collision check](docs/collision-check.md)
+for the pipeline, synthetic test evidence and limitations. General metric distance
+and physical time-to-collision remain unknown. It does not drive the belt.
+The separate CPU replay/calibration tools remain available for experiments.
+
+See the [depth, collision-risk, and belt investigation](docs/perception-and-haptics.md)
+for the next perception experiment and proposed vibration rules.
+
+The NVIDIA webcam experiment in `scripts/` is separate from the team hub below.
+It has not been connected to the hub or belt. Use separate virtual environments
+for these components; their OpenCV dependency variants differ.
 
 ## Layout
 

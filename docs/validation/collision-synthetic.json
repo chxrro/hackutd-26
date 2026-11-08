@@ -1,0 +1,187 @@
+{
+  "date": "2026-11-07",
+  "mode": "synthetic rendered targets + actual NVIDIA GPU inference + real OpenCV flow",
+  "model": "cosmos3-edge",
+  "accuracy_validated": false,
+  "sequences": [
+    {
+      "sequence": "approach",
+      "summary": "POSSIBLE COLLISION \u2014 circle center, approaching.",
+      "state": "possible",
+      "objects": [
+        {
+          "track_id": 1,
+          "label": "circle",
+          "box": [
+            0.383,
+            0.402,
+            0.627,
+            0.729
+          ],
+          "direction": "center",
+          "relative_motion": "approaching",
+          "independent_motion": "unknown",
+          "state": "possible",
+          "reason": "approaching_path",
+          "range_m": null,
+          "ttc_seconds": null,
+          "motion_source": "optical_flow",
+          "motion_status": "measured",
+          "scale_ratio": 1.6936823068592641,
+          "horizontal_velocity": 0.002629105461873338,
+          "flow_points": 27,
+          "flow_inlier_fraction": 0.7941176470588235
+        }
+      ],
+      "latency_ms": 1580,
+      "usage": {
+        "prompt_tokens": 315,
+        "total_tokens": 382,
+        "completion_tokens": 67,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "sequence": "away",
+      "summary": "NO APPARENT COLLISION DETECTED.",
+      "state": "not_observed",
+      "objects": [
+        {
+          "track_id": 1,
+          "label": "circle",
+          "box": [
+            0.434,
+            0.477,
+            0.572,
+            0.662
+          ],
+          "direction": "center",
+          "relative_motion": "away",
+          "independent_motion": "unknown",
+          "state": "not_observed",
+          "reason": "no_candidate",
+          "range_m": null,
+          "ttc_seconds": null,
+          "motion_source": "optical_flow",
+          "motion_status": "measured",
+          "scale_ratio": 0.579825395735717,
+          "horizontal_velocity": -0.002306905772732626,
+          "flow_points": 44,
+          "flow_inlier_fraction": 1.0
+        }
+      ],
+      "latency_ms": 920,
+      "usage": {
+        "prompt_tokens": 315,
+        "total_tokens": 350,
+        "completion_tokens": 35,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "sequence": "stationary",
+      "summary": "NO APPARENT COLLISION DETECTED.",
+      "state": "not_observed",
+      "objects": [
+        {
+          "track_id": 1,
+          "label": "circle",
+          "box": [
+            0.434,
+            0.477,
+            0.572,
+            0.662
+          ],
+          "direction": "center",
+          "relative_motion": "still",
+          "independent_motion": "unknown",
+          "state": "not_observed",
+          "reason": "no_candidate",
+          "range_m": null,
+          "ttc_seconds": null,
+          "motion_source": "optical_flow",
+          "motion_status": "measured",
+          "scale_ratio": 1.0,
+          "horizontal_velocity": 0.0,
+          "flow_points": 34,
+          "flow_inlier_fraction": 1.0
+        }
+      ],
+      "latency_ms": 917,
+      "usage": {
+        "prompt_tokens": 315,
+        "total_tokens": 350,
+        "completion_tokens": 35,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "sequence": "crossing",
+      "summary": "POSSIBLE COLLISION \u2014 circle center, crossing.",
+      "state": "possible",
+      "objects": [
+        {
+          "track_id": 1,
+          "label": "circle",
+          "box": [
+            0.365,
+            0.473,
+            0.504,
+            0.664
+          ],
+          "direction": "center",
+          "relative_motion": "right",
+          "independent_motion": "unknown",
+          "state": "possible",
+          "reason": "crossing_path",
+          "range_m": null,
+          "ttc_seconds": null,
+          "motion_source": "optical_flow",
+          "motion_status": "measured",
+          "scale_ratio": 1.0000003634079841,
+          "horizontal_velocity": 0.06249988393180428,
+          "flow_points": 34,
+          "flow_inlier_fraction": 1.0
+        }
+      ],
+      "latency_ms": 1599,
+      "usage": {
+        "prompt_tokens": 315,
+        "total_tokens": 382,
+        "completion_tokens": 67,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "sequence": "fast_crossing",
+      "summary": "UNKNOWN \u2014 motion is uncertain.",
+      "state": "unknown",
+      "objects": [
+        {
+          "track_id": 2,
+          "label": "circle",
+          "box": [
+            0.464,
+            0.47,
+            0.602,
+            0.664
+          ],
+          "direction": "center",
+          "relative_motion": "unknown",
+          "independent_motion": "unknown",
+          "state": "unknown",
+          "reason": "uncertain_motion",
+          "range_m": null,
+          "ttc_seconds": null
+        }
+      ],
+      "latency_ms": 1559,
+      "usage": {
+        "prompt_tokens": 315,
+        "total_tokens": 382,
+        "completion_tokens": 67,
+        "prompt_tokens_details": null
+      }
+    }
+  ]
+}

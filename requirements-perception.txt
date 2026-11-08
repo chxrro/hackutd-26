@@ -1,0 +1,2 @@
+-r requirements.txt
+# Optional offline detector/replay uses the same OpenCV installation.
