@@ -18,6 +18,7 @@ from typing import Any
 from haptic_hub.belt.base import Belt
 from haptic_hub.config import HubConfig
 from haptic_hub.haptics import HapticPolicy
+from haptic_hub.latency import LatencyStats
 from haptic_hub.perception.base import Perception
 from haptic_hub.protocol import BeltCommand
 from haptic_hub.safety import SafetyMonitor
@@ -54,6 +55,8 @@ class Hub:
         self.frame: Frame | None = None
         self.command: BeltCommand = BeltCommand.fault(cfg.perception.sectors)
         self.reason: str | None = "starting"
+        self.latency = LatencyStats()
+        self.latency_log_s = 5.0
 
     async def run(self) -> None:
         log.info("hub: source=%s perception=%s belt=%s", self.source.name, self.perception.name, self.belt.state)
@@ -63,6 +66,7 @@ class Hub:
             asyncio.create_task(self._perception_loop(), name="perception"),
             asyncio.create_task(self._belt_loop(), name="belt-loop"),
             asyncio.create_task(self._status_loop(), name="status"),
+            asyncio.create_task(self._latency_loop(), name="latency"),
         ]
         try:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
@@ -80,6 +84,7 @@ class Hub:
         while True:
             frame = await self.slot.next()
             self.frame = frame
+            self.latency.perception_started(frame, time.monotonic())
             try:
                 result = await asyncio.to_thread(self.perception.process, frame)
             except Exception as exc:  # noqa: BLE001 - any model failure must become a fault
@@ -89,6 +94,7 @@ class Hub:
                 continue
             self.result = result
             self.safety.perception_ok(time.monotonic(), frame.received_at)
+            self.latency.perception_done(result, time.monotonic())
             if self.viewer is not None and not self.viewer.show(frame, result, self.command, self.reason):
                 raise UserQuit
 
@@ -105,6 +111,7 @@ class Hub:
             self.reason = health.reason
             self.command = self.policy.command(self.result, health)
             await self.belt.send(self.command)
+            self.latency.command_sent(time.monotonic())
             await asyncio.sleep(max(0.0, period - (time.monotonic() - started)))
 
     async def _status_loop(self) -> None:
@@ -113,6 +120,15 @@ class Hub:
         while True:
             self.status_sink.publish(self.status())
             await asyncio.sleep(1.0 / self.cfg.status_hz)
+
+    async def _latency_loop(self) -> None:
+        """Hub-side stage timings in the log (and the --show window). Not sent to the phone."""
+        while True:
+            await asyncio.sleep(self.latency_log_s)
+            summary = self.latency.summarize(time.monotonic(), self.slot.dropped)
+            log.info("[%s] %s", self.source.name, summary.line())
+            if self.viewer is not None:
+                self.viewer.latency_line = summary.short()
 
     def status(self) -> dict[str, Any]:
         now = time.monotonic()
