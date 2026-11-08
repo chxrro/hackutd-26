@@ -50,6 +50,27 @@ The separate CPU replay/calibration tools remain available for experiments.
 See the [depth, collision-risk, and belt investigation](docs/perception-and-haptics.md)
 for the next perception experiment and proposed vibration rules.
 
+## Layout
+
+Three independent sections that talk only through [docs/protocol.md](docs/protocol.md):
+
+| Folder | What | Runs on |
+|---|---|---|
+| [`esp32/`](esp32/README.md) | belt firmware: BLE in, vibration motors out, failsafe | ESP32 |
+| [`hub/`](hub/README.md) | center: video feed in, collision perception, haptic commands out | laptop (Python) |
+| [`meta/`](meta/README.md) | phone bridge: Meta glasses camera to the hub | iPhone |
+
+```text
+glasses ─▶ meta/ ──WebSocket──▶ hub/ ──BLE──▶ esp32/ ─▶ motors
+           (or webcam / video file / RTSP stream straight into hub/)
+```
+
+Quick start without any hardware: `cd hub && uv sync --extra vision && uv run haptic-hub run --source webcam --belt sim --show`
+
+## Camera diagnostic
+
+[Camera Bridge](docs/camera-bridge.md) is a standalone iPhone and Mac diagnostic for USB screen mirroring and local browser preview. The USB preview passed with a simulated test pattern. The live Ray-Ban test is pending an update to the app component on the glasses.
+
 ## Team
 - [@chxrro](https://github.com/chxrro)
 - [@NathanS11](https://github.com/NathanS11)

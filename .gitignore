@@ -3,6 +3,8 @@
 .vscode/
 .idea/
 *.swp
+xcuserdata/
+/ios/Signing.local.xcconfig
 
 # Env / secrets
 .env
@@ -29,3 +31,8 @@ venv/
 /data/sessions/
 /data/calibration/
 /models/
+
+# PlatformIO / Xcode / ML artifacts
+.pio/
+DerivedData/
+*.pt

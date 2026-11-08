@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HackUTD Camera Preview</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; background: #111821; color: #f1f5fb; }
+    main { max-width: 48rem; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.6rem; }
+    #status { min-height: 1.5rem; color: #bdd4ef; }
+    #preview { max-width: 100%; max-height: 75vh; border-radius: .6rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>HackUTD Camera Preview</h1>
+    <p id="status" role="status">Waiting for the iPhone to send a frame.</p>
+    <img id="preview" alt="Current camera preview" hidden>
+  </main>
+  <script>
+    const statusLabel = document.querySelector("#status");
+    const preview = document.querySelector("#preview");
+    let displayedURL;
+
+    function setStatus(message) {
+      if (statusLabel.textContent !== message) statusLabel.textContent = message;
+    }
+
+    function clearFrame(message) {
+      preview.hidden = true;
+      preview.removeAttribute("src");
+      URL.revokeObjectURL(displayedURL);
+      displayedURL = undefined;
+      setStatus(message);
+    }
+
+    async function poll() {
+      let nextURL;
+      try {
+        const response = await fetch("/frame", { signal: AbortSignal.timeout(1000) });
+        if (response.status === 204) {
+          const stale = response.headers.get("X-Frame-State") === "stale";
+          clearFrame(stale ? "Feed stale. Check the iPhone, glasses, and Wi-Fi."
+                           : "Waiting for the iPhone to send a frame.");
+        } else if (response.ok) {
+          nextURL = URL.createObjectURL(await response.blob());
+          const frame = new Image();
+          frame.src = nextURL;
+          await frame.decode();
+          URL.revokeObjectURL(displayedURL);
+          displayedURL = nextURL;
+          nextURL = undefined;
+          preview.src = displayedURL;
+          preview.hidden = false;
+          setStatus(response.headers.get("X-Frame-Source") === "test"
+            ? "Test pattern · simulated source" : "Receiving Ray-Ban camera frames");
+        } else {
+          clearFrame("Viewer could not load the feed.");
+        }
+      } catch {
+        clearFrame("Viewer could not receive or decode a frame.");
+      } finally {
+        if (nextURL) URL.revokeObjectURL(nextURL);
+        setTimeout(poll, 125);
+      }
+    }
+
+    poll();
+  </script>
+</body>
+</html>

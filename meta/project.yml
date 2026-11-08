@@ -1,0 +1,55 @@
+# XcodeGen spec. Generate the Xcode project with:  xcodegen generate
+name: HapticBelt
+options:
+  bundleIdPrefix: com.hackutd26
+  deploymentTarget:
+    iOS: "17.2"
+  createIntermediateGroups: true
+packages:
+  MetaWearablesDAT:
+    url: https://github.com/facebook/meta-wearables-dat-ios
+    exactVersion: 1.0.1
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+targets:
+  HapticBelt:
+    type: application
+    platform: iOS
+    sources:
+      - path: HapticBelt
+    settings:
+      base:
+        INFOPLIST_FILE: HapticBelt/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: HapticBelt/Resources/HapticBelt.entitlements
+        GENERATE_INFOPLIST_FILE: NO
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "6.0"
+        ENABLE_PREVIEWS: YES
+    dependencies:
+      - package: MetaWearablesDAT
+        product: MWDATCore
+      - package: MetaWearablesDAT
+        product: MWDATCamera
+  HapticBeltTests:
+    type: bundle.unit-test
+    platform: iOS
+    # Hostless: compiles the SDK-free protocol files directly (no app, no Meta SDK).
+    sources:
+      - path: HapticBeltTests
+      - path: HapticBelt/Hub/FramePacket.swift
+      - path: HapticBelt/Hub/HubMessages.swift
+      - path: HapticBelt/Hub/HubAddress.swift
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+schemes:
+  HapticBelt:
+    build:
+      targets:
+        HapticBelt: all
+        HapticBeltTests: [test]
+    test:
+      targets:
+        - HapticBeltTests

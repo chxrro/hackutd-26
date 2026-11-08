@@ -1,0 +1,130 @@
+"""The hub's main loop. Wires a frame source, perception, the haptic policy and a
+belt together. Each stage runs on its own cadence:
+
+  source      -> pushes frames into a 1-slot buffer as fast as they arrive
+  perception  -> takes the newest frame, runs the model in a worker thread
+  belt loop   -> at a fixed rate, sends the current command (heartbeat)
+  status loop -> tells the phone what the belt is doing
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import logging
+import time
+from typing import Any
+
+from haptic_hub.belt.base import Belt
+from haptic_hub.config import HubConfig
+from haptic_hub.haptics import HapticPolicy
+from haptic_hub.perception.base import Perception
+from haptic_hub.protocol import BeltCommand
+from haptic_hub.safety import SafetyMonitor
+from haptic_hub.sources.base import FrameSource, LatestFrameSlot, StatusSink
+from haptic_hub.types import Frame, PerceptionResult
+
+log = logging.getLogger(__name__)
+
+
+class UserQuit(Exception):
+    """The debug window was closed with q / Esc."""
+
+
+class Hub:
+    def __init__(
+        self,
+        cfg: HubConfig,
+        source: FrameSource,
+        perception: Perception,
+        belt: Belt,
+        status_sink: StatusSink | None = None,
+        viewer: Any | None = None,  # haptic_hub.viz.DebugView
+    ) -> None:
+        self.cfg = cfg
+        self.source = source
+        self.perception = perception
+        self.belt = belt
+        self.status_sink = status_sink
+        self.viewer = viewer
+        self.slot = LatestFrameSlot()
+        self.safety = SafetyMonitor(cfg.safety)
+        self.policy = HapticPolicy(cfg.haptics, cfg.perception.sectors)
+        self.result: PerceptionResult | None = None
+        self.frame: Frame | None = None
+        self.command: BeltCommand = BeltCommand.fault(cfg.perception.sectors)
+        self.reason: str | None = "starting"
+
+    async def run(self) -> None:
+        log.info("hub: source=%s perception=%s belt=%s", self.source.name, self.perception.name, self.belt.state)
+        tasks = [
+            asyncio.create_task(self.source.run(self.slot), name="source"),
+            asyncio.create_task(self.belt.run(), name="belt"),
+            asyncio.create_task(self._perception_loop(), name="perception"),
+            asyncio.create_task(self._belt_loop(), name="belt-loop"),
+            asyncio.create_task(self._status_loop(), name="status"),
+        ]
+        try:
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+            for task in done:  # a stage died: surface it instead of carrying on half-working
+                task.result()
+        finally:
+            for task in tasks:
+                task.cancel()
+            for task in tasks:
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
+            await self.belt.close()
+
+    async def _perception_loop(self) -> None:
+        while True:
+            frame = await self.slot.next()
+            self.frame = frame
+            try:
+                result = await asyncio.to_thread(self.perception.process, frame)
+            except Exception as exc:  # noqa: BLE001 - any model failure must become a fault
+                log.exception("perception failed")
+                self.safety.perception_failed(type(exc).__name__)
+                await asyncio.sleep(0.2)
+                continue
+            self.result = result
+            self.safety.perception_ok(time.monotonic())
+            if self.viewer is not None and not self.viewer.show(frame, result, self.command, self.reason):
+                raise UserQuit
+
+    async def _belt_loop(self) -> None:
+        period = 1.0 / self.cfg.haptics.send_hz
+        while True:
+            started = time.monotonic()
+            latest = self.slot.latest
+            if latest is not None:  # count arrivals even while perception is busy
+                self.safety.frame_received(latest.received_at)
+            health = self.safety.check(started)
+            if health.reason != self.reason:
+                log.info("health: %s", "ok" if health.ok else health.reason)
+            self.reason = health.reason
+            self.command = self.policy.command(self.result, health)
+            await self.belt.send(self.command)
+            await asyncio.sleep(max(0.0, period - (time.monotonic() - started)))
+
+    async def _status_loop(self) -> None:
+        if self.status_sink is None:
+            return
+        while True:
+            self.status_sink.publish(self.status())
+            await asyncio.sleep(1.0 / self.cfg.status_hz)
+
+    def status(self) -> dict[str, Any]:
+        now = time.monotonic()
+        age = self.safety.frame_age(now)
+        return {
+            "type": "status",
+            "mode": self.command.mode.name.lower(),
+            "healthy": self.reason is None,
+            "reason": self.reason,
+            "levels": list(self.command.levels),
+            "belt": self.belt.state,
+            "source": self.source.name,
+            "inference_ms": round(self.result.inference_ms, 1) if self.result else None,
+            "frame_age_ms": round(age * 1000, 1) if age is not None else None,
+        }

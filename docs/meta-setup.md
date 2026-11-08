@@ -19,7 +19,7 @@ Sources:
 - [Android integration](https://wearables.developer.meta.com/docs/develop/dat/build-integration-android/)
 - [iOS integration](https://wearables.developer.meta.com/docs/develop/dat/build-integration-ios/)
 
-No SDK was installed or executed as part of this setup. The SDK README says use constitutes agreement to the [Wearables Developer Terms](https://wearables.developer.meta.com/terms/) and [Acceptable Use Policy](https://wearables.developer.meta.com/acceptable-use-policy/); obtain user approval before proceeding with SDK use.
+On 2026-11-07 the owner approved using the SDK for the local prototype under the [Wearables Developer Terms](https://wearables.developer.meta.com/terms/) and [Acceptable Use Policy](https://wearables.developer.meta.com/acceptable-use-policy/). The Camera Bridge target declares SDK `1.0.1`. Full Xcode is needed to resolve and build the iPhone target on this Mac.
 
 ## Verified capabilities and requirements
 
@@ -37,9 +37,9 @@ Setup docs list iOS **17.2+**, Xcode **26.4+**; Android **10+**, Android Studio 
 - API: https://wearables.developer.meta.com/docs/reference/ios_swift/dat/latest
 - Integration: https://wearables.developer.meta.com/docs/develop/dat/build-integration-ios/
 
-In Xcode, choose **File → Add Package Dependencies**, enter `https://github.com/meta/meta-wearables-dat-ios`, select a published version and add the package to the app target. Repository head is labeled Release 1.0.1. Use `MWDATCore` and `MWDATCamera` for the camera integration.
+Camera Bridge already declares `MWDATCore` and `MWDATCamera` from SDK `1.0.1`. Open the project in Xcode to resolve the package. For a new iOS target, add those two products under **File → Add Package Dependencies**.
 
-Follow the integration guide for Info.plist, Bluetooth/local network usage descriptions, callback handling, registration and camera permission. Developer Mode supports a custom callback URL scheme, registered in `CFBundleURLTypes`. Production configuration requires an HTTPS Universal Link, Associated Domains and AASA. The guide lists `MWDAT` configuration keys `AppLinkURLScheme`, `MetaAppID`, `ClientToken` and `TeamID`; TeamID is the Apple developer team ID, not a Meta organization ID. Do not substitute a Horizon org ID for it. Exact iOS Developer Mode placeholder values still need confirmation before implementation.
+Follow the integration guide for Info.plist, Bluetooth/local network usage descriptions, callback handling, registration and camera permission. Developer Mode supports a custom callback URL scheme, registered in `CFBundleURLTypes`. Production configuration requires an HTTPS Universal Link, Associated Domains and AASA. The guide lists `MWDAT` configuration keys `AppLinkURLScheme`, `MetaAppID`, `ClientToken` and `TeamID`; TeamID is the Apple developer team ID, not a Meta organization ID. Do not substitute a Horizon org ID for it. [Meta’s iOS guide](https://github.com/meta/meta-wearables-dat-ios/blob/main/AGENTS.md#step-2-configure-infoplist) documents `MetaAppID=0` for Developer Mode. The [Camera Bridge project](camera-bridge.md) uses that setting and leaves the client token unset.
 
 ## Android SDK and installation
 
@@ -72,8 +72,8 @@ Initialize `Wearables`, launch registration with the Meta AI app, request camera
 - [ ] Check the current [version dependencies](https://wearables.developer.meta.com/docs/develop/dat/version-dependencies/) for Meta AI app and glasses firmware; exact minimum versions were not transcribed.
 - [ ] Connect glasses to the Meta AI app.
 - [ ] Check glasses version: **Devices tab → select glasses → gear icon → General → About → Version**; update if below the supported version.
-- [ ] In Meta AI on iOS or Android: **Settings → App Info → tap App version five times → Developer Mode toggle → Enable**. User performs this phone setting change.
-- [ ] After approval of SDK terms, build/install the appropriate camera sample or integration on the phone.
+- [ ] In Meta AI on iOS or Android: open **Settings → App Info**, then tap **App version** several times to reveal **Developer Mode**. Enable it, then check the connected glasses in that screen. If Meta shows **Install** or **Update** for the on-glasses app component, wear the glasses and complete that step before starting a camera session. The phone and glasses owners perform these changes. [Meta Developer Mode troubleshooting](https://github.com/meta/meta-wearables-dat-ios/discussions/195)
+- [ ] Build and install Camera Bridge on the phone.
 - [ ] Register through Meta AI, grant required Bluetooth and camera permissions; on iOS follow Local Network/Wi-Fi prompts required by the integration guide.
 - [ ] Confirm the app under **Meta AI settings → App connections → Developer mode apps**.
 - [ ] Verify real frames arrive before connecting collision detection and belt motor commands.
@@ -92,10 +92,9 @@ Testers use a different identity flow: [private release-channel invitations](htt
 
 ## Next steps for the local prototype
 
-1. User reviews/approves SDK terms before SDK use. No console signup or email selection is needed for the selected local prototype path.
-2. Complete the phone/glasses Developer Mode checklist above.
-3. Choose iOS or Android for the actual app implementation; both setup paths are documented. No platform choice has been made on the user's behalf.
-4. Build the CameraAccess sample, confirm camera frames, then integrate collision detection and belt control.
-5. Confirm iOS Developer Mode placeholder values, exact firmware/app dependency versions and the chosen sample build instructions during implementation.
+1. Complete the phone/glasses Developer Mode checklist above.
+2. Build [iPhone Camera Bridge](camera-bridge.md) and verify the test pattern first.
+3. Confirm firmware and Meta AI app compatibility on the phone and glasses used for the bench test.
+4. Confirm real camera frames, then integrate collision detection and belt control.
 
-The console/team section above is reference only and outside the clarified prototype scope. No commit or push.
+The console/team section above is reference only and outside the clarified prototype scope.
