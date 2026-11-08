@@ -86,12 +86,13 @@ class ClassifiedPerception:
 
         cloud_labels: dict[int, str] = {}
         status: dict[str, Any] = {"backend": "local"}
-        if self.cloud is not None:
+        cloud = self.cloud  # read once: control.py may swap it while this runs in a worker thread
+        if cloud is not None:
             infer_size = result.debug.get("infer_size", frame.image.shape[1::-1])
-            self.cloud.submit(frame.image, boxes, infer_size, now)
-            status = self.cloud.status(now)
-            if (why := self.cloud.stale_reason(now)) is None:
-                cloud_labels = self.cloud.labels(now)
+            cloud.submit(frame.image, boxes, infer_size, now)
+            status = cloud.status(now)
+            if (why := cloud.stale_reason(now)) is None:
+                cloud_labels = cloud.labels(now)
             else:  # can't vouch for cloud labels: every box keeps its local one
                 status = {**status, "stale": True, "error": why}
 

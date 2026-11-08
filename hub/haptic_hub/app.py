@@ -17,12 +17,13 @@ from typing import Any
 
 from haptic_hub.belt.base import Belt
 from haptic_hub.config import HubConfig
+from haptic_hub.control import Control
 from haptic_hub.haptics import HapticPolicy
 from haptic_hub.perception.base import Perception
 from haptic_hub.protocol import BeltCommand
 from haptic_hub.safety import SafetyMonitor
 from haptic_hub.sources.base import FrameSource, LatestFrameSlot, StatusSink
-from haptic_hub.types import Frame, PerceptionResult
+from haptic_hub.types import Frame, Health, PerceptionResult
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +41,8 @@ class Hub:
         belt: Belt,
         status_sink: StatusSink | None = None,
         viewer: Any | None = None,  # haptic_hub.viz.DebugView
+        control: Control | None = None,
+        dashboard: Any | None = None,  # haptic_hub.dashboard.Dashboard
     ) -> None:
         self.cfg = cfg
         self.source = source
@@ -54,6 +57,12 @@ class Hub:
         self.frame: Frame | None = None
         self.command: BeltCommand = BeltCommand.fault(cfg.perception.sectors)
         self.reason: str | None = "starting"
+        self.control = control or Control(cfg, perception)
+        self.dashboard = dashboard
+        self.health: Health | None = None  # safety verdict alone, before pause / belt test
+        self.result_frame: Frame | None = None  # the frame self.result was computed from
+        if hasattr(source, "control"):  # sources/glasses.py routes hello/control messages here
+            source.control = self.control
 
     async def run(self) -> None:
         log.info("hub: source=%s perception=%s belt=%s", self.source.name, self.perception.name, self.belt.state)
@@ -64,6 +73,8 @@ class Hub:
             asyncio.create_task(self._belt_loop(), name="belt-loop"),
             asyncio.create_task(self._status_loop(), name="status"),
         ]
+        if self.dashboard is not None:
+            tasks.append(asyncio.create_task(self.dashboard.run(self), name="dashboard"))
         try:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
             for task in done:  # a stage died: surface it instead of carrying on half-working
@@ -88,6 +99,7 @@ class Hub:
                 await asyncio.sleep(0.2)
                 continue
             self.result = result
+            self.result_frame = frame
             self.safety.perception_ok(time.monotonic(), frame.received_at)
             if self.viewer is not None and not self.viewer.show(frame, result, self.command, self.reason):
                 raise UserQuit
@@ -100,10 +112,12 @@ class Hub:
             if latest is not None:  # count arrivals even while perception is busy
                 self.safety.frame_received(latest.received_at)
             health = self.safety.check(started)
-            if health.reason != self.reason:
-                log.info("health: %s", "ok" if health.ok else health.reason)
-            self.reason = health.reason
-            self.command = self.policy.command(self.result, health)
+            self.health = health
+            command = self.policy.command(self.result, health)
+            self.command, reason = self.control.apply(command, health, self.belt.state, started)
+            if reason != self.reason:
+                log.info("health: %s", "ok" if reason is None else reason)
+            self.reason = reason
             await self.belt.send(self.command)
             await asyncio.sleep(max(0.0, period - (time.monotonic() - started)))
 
@@ -127,4 +141,5 @@ class Hub:
             "source": self.source.name,
             "inference_ms": round(self.result.inference_ms, 1) if self.result else None,
             "frame_age_ms": round(age * 1000, 1) if age is not None else None,
+            **self.control.status_fields(self.result, self.health, self.cfg.perception.sectors),
         }

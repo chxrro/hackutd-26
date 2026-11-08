@@ -12,6 +12,7 @@ import numpy as np
 from websockets.asyncio.server import ServerConnection, broadcast, serve
 from websockets.exceptions import ConnectionClosed
 
+from haptic_hub.control import redact, ws_logger
 from haptic_hub.protocol import ProtocolError, decode_frame_packet
 from haptic_hub.sources.base import LatestFrameSlot
 from haptic_hub.types import Frame
@@ -34,10 +35,11 @@ class GlassesServer:
         self.phone_stream_state: str | None = None
         self.frames_received = 0
         self.bad_messages = 0
+        self.control: Any | None = None  # haptic_hub.control.Control, set by the Hub
 
     async def run(self, slot: LatestFrameSlot) -> None:
         self._slot = slot
-        async with serve(self._handle, self.host, self.port, max_size=MAX_MESSAGE_BYTES) as server:
+        async with serve(self._handle, self.host, self.port, max_size=MAX_MESSAGE_BYTES, logger=ws_logger("glasses")) as server:
             log.info("waiting for the phone on ws://%s:%d", self.host, self.port)
             await server.serve_forever()
 
@@ -62,7 +64,7 @@ class GlassesServer:
                 if isinstance(message, bytes):
                     self._on_frame(message)
                 else:
-                    self._on_text(message)
+                    self._on_text(message, conn)
         except ConnectionClosed:
             pass
         finally:
@@ -86,15 +88,22 @@ class GlassesServer:
         assert self._slot is not None
         self._slot.put(Frame(packet.seq, image, received_at, packet.capture_ms, self.name))
 
-    def _on_text(self, text: str) -> None:
+    def _on_text(self, text: str, conn: ServerConnection | None = None) -> None:
         try:
             msg = json.loads(text)
         except json.JSONDecodeError:
             self._reject("non-JSON text message")
             return
+        if not isinstance(msg, dict):
+            self._reject("text message is not a JSON object")
+            return
         kind = msg.get("type")
         if kind == "hello":
-            log.info("phone says hello: %s", msg)
+            log.info("phone says hello: %s", redact(msg))  # never log the control code
+            if self.control is not None:
+                self.control.on_client_message(conn, msg)
+        elif kind == "control" and self.control is not None:
+            self.control.on_client_message(conn, msg)
         elif kind == "phone_status":
             self.phone_stream_state = msg.get("stream")
             log.info("phone glasses stream: %s", self.phone_stream_state)

@@ -5,6 +5,7 @@
   haptic-hub run --source stream:rtsp://192.168.1.50:8554/live
   haptic-hub run --perception sweep      bench-test belt + phone without any model
   haptic-hub run --source webcam --belt sim --show --classifier nim   cloud person/object labels
+  haptic-hub run --source webcam --belt sim --dashboard   operator dashboard on http://127.0.0.1:8780/
   haptic-hub nim-bench --image photo.jpg measure cloud classifier round trips
   haptic-hub belt-test                   buzz each motor in order
   haptic-hub scan                        look for the belt over BLE
@@ -95,7 +96,39 @@ async def _run(args: argparse.Namespace) -> None:
         viewer = DebugView()
 
     status_sink = source if hasattr(source, "publish") else None
-    await Hub(cfg, source, perception, belt, status_sink, viewer).run()
+    control = _make_control(cfg, perception)
+    dashboard = None
+    if args.dashboard:
+        from haptic_hub.dashboard import Dashboard
+
+        phone = f"ws://{_local_ip()}:{cfg.ws_port}" if args.source == "glasses" else None
+        dashboard = Dashboard(args.dashboard_port, phone_address=phone)
+        log.info("dashboard: open %s", dashboard.url)
+    await Hub(cfg, source, perception, belt, status_sink, viewer, control, dashboard).run()
+
+
+def _make_control(cfg: HubConfig, perception):
+    """Runtime settings for the phone / dashboard (control.py). The control code is
+    printed once, never logged; the cloud classifier can be switched on at runtime
+    only if this hub was started with a cloud endpoint configured."""
+    import os
+
+    from haptic_hub.control import Control
+
+    c = cfg.classifier
+    configured = c.backend == "nim" or bool(
+        c.base_url or os.environ.get("NIM_BASE_URL") or os.environ.get("NIM_API_KEY") or os.environ.get("NVIDIA_API_KEY")
+    )
+    factory = None
+    if configured:
+        from haptic_hub.perception.nim import NimLabeler
+
+        def factory():
+            return NimLabeler.from_config(c)
+
+    control = Control(cfg, perception, factory)
+    print(f"control code (pair the phone app / shown on the dashboard):  {control.code}", flush=True)
+    return control
 
 
 def _load_env_file(path: str) -> None:
@@ -252,6 +285,8 @@ def main() -> None:
     run.add_argument("--device", help="torch device: mps, cuda or cpu (default: auto)")
     run.add_argument("--outdoor", action="store_true", help="use the outdoor metric depth model")
     run.add_argument("--show", action="store_true", help="open a debug window")
+    run.add_argument("--dashboard", action="store_true", help="serve the operator dashboard on http://127.0.0.1:8780/")
+    run.add_argument("--dashboard-port", type=int, default=8780, help="dashboard port (always bound to 127.0.0.1)")
     _add_classifier_args(run)
 
     test = sub.add_parser("belt-test", help="buzz each motor in order over BLE")

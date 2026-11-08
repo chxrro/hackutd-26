@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Haptic Hub</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#controls-h">Skip to controls</a>
+  <header class="top">
+    <div class="brand">
+      <h1>Haptic Hub</h1>
+      <p class="sub">Operator dashboard (this laptop only)</p>
+    </div>
+    <p class="source" id="source" data-kind="unknown"><span class="source-tag">Source</span> <span id="source-label">connecting…</span></p>
+    <button type="button" class="ghost" id="theme" aria-label="Color theme: automatic">Theme: auto</button>
+  </header>
+
+  <section class="banner" id="banner" data-level="fault" aria-labelledby="banner-title">
+    <span class="banner-icon" id="banner-icon" aria-hidden="true">!</span>
+    <div>
+      <p class="banner-title" id="banner-title">Connecting to the hub…</p>
+      <p class="banner-detail" id="banner-detail">No data yet. Do not rely on the belt.</p>
+    </div>
+  </section>
+  <p class="sr-only" id="announce" aria-live="assertive" aria-atomic="true"></p>
+
+  <main class="grid">
+    <section class="card view" aria-labelledby="view-h">
+      <h2 id="view-h">Live view</h2>
+      <figure>
+        <div class="frame">
+          <img id="preview" alt="Camera frame with detection boxes. No frame yet.">
+          <p class="frame-note" id="frame-note">No frame yet</p>
+        </div>
+        <figcaption>
+          <span class="chip person">Person</span>
+          <span class="chip object">Object</span>
+          <span class="muted">White lines split the view into the 5 motor directions.</span>
+        </figcaption>
+      </figure>
+      <dl class="stats">
+        <div><dt>Inference</dt><dd id="inference">–</dd></div>
+        <div><dt>Frame age</dt><dd id="frame-age">–</dd></div>
+        <div><dt>Perception</dt><dd id="perception">–</dd></div>
+        <div><dt>Source details</dt><dd id="source-details">–</dd></div>
+      </dl>
+    </section>
+
+    <section class="card belt" aria-labelledby="belt-h">
+      <div class="card-head">
+        <h2 id="belt-h">Belt</h2>
+        <p class="mode" id="mode" data-mode="fault">–</p>
+      </div>
+      <p class="muted" id="belt-state">–</p>
+      <ol class="motors" id="motors" aria-label="Motor levels, wearer's left to right"></ol>
+      <p class="muted small">A motor buzzes for an obstacle in that direction. It does not mean “move this way”. The labels below each motor are for display only and say nothing about distance.</p>
+    </section>
+
+    <section class="card controls" aria-labelledby="controls-h">
+      <h2 id="controls-h" tabindex="-1">Controls</h2>
+      <div class="buttons">
+        <button type="button" id="pause" class="primary" aria-pressed="false">Pause alerts</button>
+        <button type="button" id="belt-test">Belt test (2 s sweep)</button>
+      </div>
+      <fieldset id="classifier-set">
+        <legend>Person / object labels</legend>
+        <label><input type="radio" name="classifier" value="local"> Local (detector class)</label>
+        <label><input type="radio" name="classifier" value="nim"> Cloud (Nemotron)</label>
+        <p class="muted small" id="classifier-hint"></p>
+      </fieldset>
+      <fieldset id="range-set">
+        <legend>Alert range</legend>
+        <div id="ranges"></div>
+        <p class="muted small">Unvalidated presets: where alerts start, by estimated distance and time to collision.</p>
+      </fieldset>
+      <p class="ack" id="ack" aria-live="polite"></p>
+    </section>
+
+    <section class="card cloud" aria-labelledby="cloud-h">
+      <h2 id="cloud-h">Cloud classifier</h2>
+      <dl class="stats" id="cloud">
+        <div><dt>State</dt><dd id="cloud-state">–</dd></div>
+        <div><dt>Model</dt><dd id="cloud-model">–</dd></div>
+        <div><dt>Round trip</dt><dd id="cloud-rtt">–</dd></div>
+        <div><dt>Last reply</dt><dd id="cloud-last">–</dd></div>
+        <div class="wide"><dt>Error</dt><dd id="cloud-error">–</dd></div>
+      </dl>
+    </section>
+
+    <section class="card pairing" aria-labelledby="pair-h">
+      <h2 id="pair-h">Pair the phone</h2>
+      <p class="muted small">Type this code into the phone app to let it pause alerts and change settings. Without it the phone can still stream frames.</p>
+      <p class="code" id="code" aria-label="Control code">––––––––––––––––</p>
+      <button type="button" id="copy" class="ghost">Copy code</button>
+      <dl class="stats">
+        <div><dt>Hub address</dt><dd id="phone-address">–</dd></div>
+        <div><dt>Paired phones</dt><dd id="paired">–</dd></div>
+      </dl>
+    </section>
+  </main>
+
+  <footer>
+    Experimental prototype. Not a mobility aid and not validated. Use only in supervised tests. Silence means no alert, never a clear path.
+  </footer>
+</body>
+</html>
