@@ -227,19 +227,30 @@ def _scenarios() -> list[Scenario]:
          c.motors_on(2, 5.8, 6.5)],
         [Fault("perception_stall", 2.5, 2.6, value=2.5)], fault,
     ))  # fmt: skip
+    # Lost writes: the hub writes with response, so it notices within one command
+    # TTL (+ a belt-loop tick, + one status period for the phone to hear it), sends
+    # the fault pattern, and after BleBelt.WRITE_TIMEOUT_S without an answer drops
+    # the connection and reconnects.
+    ttl_s = HubConfig().haptics.ttl_ms / 1000
+    status_period = 1 / HubConfig().status_hz
     s.append(Scenario(
-        "belt_writes_lost", "Pole ahead; BLE writes are silently lost for 1 s (link stays up). Only the "
-        "firmware TTL can notice.", 5.0,
+        "belt_writes_lost", "Pole ahead; BLE writes are silently lost for 1 s (link stays up). The firmware TTL "
+        "plays the fault pattern; the hub must report 'belt not acknowledging', reconnect, and recover.", 5.5,
         _pole_ahead(),
-        [c.motors_on(2, 1.0, 2.4), c.fault_within(2.5, 0.25 + belt_period + 0.05), c.fault_during(2.9, 3.5),
-         c.recovers_within(3.5, 0.2), c.motors_on(2, 3.8, 5.0)],
+        [c.motors_on(2, 1.0, 2.4), c.fault_within(2.5, ttl_s + belt_period + 0.05), c.fault_during(2.9, 3.5),
+         c.status_unhealthy_within(2.5, ttl_s + belt_period + status_period + 0.15, "belt not acknowledging"),
+         c.status_reports(2.5 + ttl_s + belt_period + status_period + 0.15, 3.5, healthy=False, min_frac=1.0),
+         c.recovers_within(3.5, 0.6), c.motors_on(2, 4.3, 5.5), c.status_reports(4.5, 5.5, healthy=True, min_frac=1.0),
+         c.counter("belt_reconnects", lambda n: n >= 1, ">= 1")],
         [Fault("belt_drop", 2.5, 3.5)], fault,
     ))  # fmt: skip
     s.append(Scenario(
-        "belt_disconnect", "Pole ahead; the BLE link drops for 1 s.", 5.0,
+        "belt_disconnect", "Pole ahead; the BLE link drops for 1 s; the hub reconnects.", 5.5,
         _pole_ahead(),
-        [c.motors_on(2, 1.0, 2.4), c.fault_within(2.5, 0.05), c.fault_during(2.6, 3.5), c.recovers_within(3.5, 0.2),
-         c.motors_on(2, 3.8, 5.0)],
+        [c.motors_on(2, 1.0, 2.4), c.fault_within(2.5, 0.05), c.fault_during(2.6, 3.5),
+         c.status_unhealthy_within(2.5, belt_period + status_period + 0.1),
+         c.status_reports(2.5 + belt_period + status_period + 0.1, 3.5, healthy=False, min_frac=1.0),
+         c.recovers_within(3.5, 0.8), c.motors_on(2, 4.5, 5.5), c.status_reports(4.7, 5.5, healthy=True, min_frac=1.0)],
         [Fault("belt_disconnect", 2.5, 3.5)], fault,
     ))  # fmt: skip
     s.append(Scenario(

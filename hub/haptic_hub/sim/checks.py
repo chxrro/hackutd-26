@@ -188,6 +188,27 @@ def status_reports(t0: float, t1: float, healthy: bool, min_frac: float = 0.8) -
     return check
 
 
+def status_unhealthy_within(t_event: float, max_delay: float, reason: str | None = None) -> Check:
+    """The phone is told `healthy: false` (with `reason`, if given) no later than
+    max_delay after t_event, and that verdict holds until at least max_delay later."""
+
+    def check(tl: Timeline) -> CheckResult:
+        name = f"status unhealthy within {max_delay:g}s of t={t_event:g}" + (f" ({reason!r})" if reason else "")
+        msgs = [(t, m) for t, m in tl.statuses if t >= t_event and m.get("type") == "status"]
+        first = next(((t, m) for t, m in msgs if not m.get("healthy")), None)
+        if first is None:
+            return CheckResult(name, False, f"never unhealthy in {len(msgs)} msgs")
+        t, m = first
+        if reason is not None:
+            seen = {m2.get("reason") for t2, m2 in msgs if t <= t2 <= t + max_delay and not m2.get("healthy")}
+            if reason not in seen:
+                return CheckResult(name, False, f"reasons {sorted(map(str, seen))}")
+        delay = t - t_event
+        return CheckResult(name, delay <= max_delay, f"after {delay * 1000:.0f} ms ({m.get('reason')})")
+
+    return check
+
+
 def no_collision() -> Check:
     def check(tl: Timeline) -> CheckResult:
         return CheckResult("no collision", not tl.collisions, f"{tl.collisions}" if tl.collisions else "clear")
@@ -301,4 +322,26 @@ def belt_never_idle(start_s: float = 0.5) -> Check:
     return check
 
 
-INVARIANTS: tuple[Callable[[], Check], ...] = (never_silent_when_unhealthy, belt_never_idle)
+def belt_fault_is_reported(settle_s: float = 0.35, start_s: float = 0.5) -> Check:
+    """The converse of never_silent_when_unhealthy: whenever the belt plays the
+    fault pattern (its TTL ran out, the link dropped, or the hub sent it), the hub
+    must not be telling the phone it's healthy. settle_s covers one firmware TTL
+    (0.25 s) plus a belt-loop tick and sampling slack."""
+
+    def check(tl: Timeline) -> CheckResult:
+        bad = []
+        for h in tl.hub:
+            if h.t < start_s + settle_s or h.reason is not None:
+                continue
+            if any(o.reason is not None for o in tl.hub if h.t - settle_s <= o.t <= h.t):
+                continue  # the hub only just became healthy; the belt follows within a command
+            window = tl.belt_between(h.t - settle_s, h.t)
+            if window and all(s.signalling_fault for s in window):
+                bad.append(round(h.t, 2))
+        return CheckResult("invariant: belt faulting -> hub not healthy", not bad,
+                           f"healthy while belt faulted at t={bad[:5]}" if bad else "held")  # fmt: skip
+
+    return check
+
+
+INVARIANTS: tuple[Callable[[], Check], ...] = (never_silent_when_unhealthy, belt_never_idle, belt_fault_is_reported)

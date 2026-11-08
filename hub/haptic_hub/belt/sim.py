@@ -23,6 +23,7 @@ def render(cmd: BeltCommand) -> str:
 
 class SimBelt:
     state = "simulated"
+    fault: str | None = None  # nothing to lose writes on
 
     def __init__(self, motors: int, log_interval_s: float = 0.5) -> None:
         self.last: BeltCommand = BeltCommand.off(motors)
