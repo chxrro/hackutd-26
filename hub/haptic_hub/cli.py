@@ -6,7 +6,7 @@
   haptic-hub run --perception sweep      bench-test belt + phone without any model
   haptic-hub run --record                also save incoming frames to hub/recordings/ (opt-in)
   haptic-hub run --source replay:recordings/session-001 --belt sim --show   replay a session
-  haptic-hub run --source webcam --belt sim --show --classifier nim   cloud person/object labels
+  haptic-hub run --source webcam --belt sim --show --classifier local   skip the Nemotron labels
   haptic-hub run --source webcam --belt sim --dashboard   operator dashboard on http://127.0.0.1:8780/
   haptic-hub nim-bench --image photo.jpg measure cloud classifier round trips
   haptic-hub belt-test                   buzz each motor in order
@@ -106,13 +106,7 @@ async def _run(args: argparse.Namespace) -> None:
     log.info("loading perception '%s' (first run downloads model weights)", args.perception)
     perception = await asyncio.to_thread(build_perception, args.perception, cfg.perception)
     if args.perception != "sweep":  # person/object labels need the detector's boxes
-        from haptic_hub.perception.classify import build_classified
-        from haptic_hub.perception.nim import NimSetupError
-
-        try:
-            perception = await asyncio.to_thread(build_classified, perception, cfg.classifier)
-        except NimSetupError as exc:
-            raise SystemExit(f"cloud classifier: {exc}") from exc
+        perception = await asyncio.to_thread(_build_classifier, args.classifier, cfg, perception)
     belt = _make_belt(args.belt, cfg.perception.sectors, args.belt_address, args.sim_log_interval)
 
     viewer = None
@@ -132,6 +126,28 @@ async def _run(args: argparse.Namespace) -> None:
         log.info("dashboard: open %s", dashboard.url)
     source = _wrap_recording(args, source)
     await Hub(cfg, source, perception, belt, status_sink, viewer, control, dashboard).run()
+
+
+def _build_classifier(choice: str, cfg: HubConfig, perception):
+    """Wrap perception with person/object labels. "auto" (the default) uses
+    Nemotron when its endpoint answers at startup and otherwise falls back to the
+    local labels with a warning; "nim" refuses to start without it."""
+    from haptic_hub.perception.classify import build_classified
+    from haptic_hub.perception.nim import NimSetupError
+
+    cfg.classifier.backend = "nim" if choice == "auto" else choice
+    try:
+        return build_classified(perception, cfg.classifier)
+    except NimSetupError as exc:
+        if choice != "auto":
+            raise SystemExit(f"cloud classifier: {exc}") from exc
+        log.warning(
+            "Nemotron classifier unavailable, using local person/object labels: %s "
+            "(--classifier local skips this check)",
+            exc,
+        )
+        cfg.classifier.backend = "local"
+        return build_classified(perception, cfg.classifier)
 
 
 def _make_control(cfg: HubConfig, perception):
@@ -190,10 +206,17 @@ def _load_env_file(path: str) -> None:
             os.environ.setdefault(key.removeprefix("export ").strip(), value.strip().strip("'\""))
 
 
+DEFAULT_NIM_ENV = "~/.config/haptic-hub/nim.env"
+
+
 def _apply_classifier_args(args: argparse.Namespace, cfg: HubConfig) -> None:
+    from pathlib import Path
+
     if args.nim_env:
         _load_env_file(args.nim_env)
-    cfg.classifier.backend = args.classifier
+    elif Path(DEFAULT_NIM_ENV).expanduser().is_file():
+        _load_env_file(DEFAULT_NIM_ENV)
+    cfg.classifier.backend = "nim" if args.classifier == "auto" else args.classifier
     if args.nim_url:
         cfg.classifier.base_url = args.nim_url
     if args.nim_model:
@@ -304,13 +327,14 @@ def _add_classifier_args(p: argparse.ArgumentParser, backend: bool = True) -> No
     if backend:
         p.add_argument(
             "--classifier",
-            default="local",
-            choices=["local", "nim"],
-            help="person vs. object labels: local = detector class (default), nim = Nemotron vision model in the cloud",
+            default="auto",
+            choices=["auto", "local", "nim"],
+            help="person vs. object labels: auto = Nemotron if its endpoint answers at startup, else local (default); "
+            "nim = Nemotron or refuse to start; local = detector class only",
         )
     p.add_argument("--nim-url", help="OpenAI-compatible base URL (default: $NIM_BASE_URL or NVIDIA's hosted API)")
     p.add_argument("--nim-model", help="model name (default: $NIM_MODEL, else the hosted default / the server's first model)")
-    p.add_argument("--nim-env", help="file of KEY=VALUE lines to load first, e.g. ~/.config/haptic-hub/nim.env")
+    p.add_argument("--nim-env", help=f"file of KEY=VALUE lines to load first (default: {DEFAULT_NIM_ENV} if it exists)")
 
 
 def main() -> None:
