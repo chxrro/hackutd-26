@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  hub:
+    name: hub (pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: hub
+    env:
+      # Core install only: no torch/ultralytics/clip, so no model can load.
+      # Belt and braces in case a test ever reaches a model loader anyway.
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.9.28"
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: hub/uv.lock
+
+      - name: Install (core + dev, from the lockfile)
+        run: uv sync --frozen
+
+      - name: Check the heavy vision extra is not installed
+        run: |
+          uv run python - <<'EOF'
+          import importlib.util, sys
+          found = [m for m in ("torch", "ultralytics", "transformers", "clip") if importlib.util.find_spec(m)]
+          if found:
+              sys.exit(f"vision packages installed in CI: {found}")
+          print("ok: no vision packages")
+          EOF
+
+      - name: pytest (includes docs/protocol.md golden vectors)
+        run: uv run pytest -rs --durations=10
+
+  firmware:
+    name: firmware (native tests + esp32 build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: esp32
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: "3.13"
+
+      - uses: actions/cache@v6.1.0
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-6.1.18-${{ hashFiles('esp32/platformio.ini') }}
+          restore-keys: pio-${{ runner.os }}-6.1.18-
+
+      - name: Install PlatformIO
+        run: pip install platformio==6.1.18
+
+      - name: Native logic tests (includes docs/protocol.md golden vector)
+        run: pio test -e native
+
+      - name: Compile firmware (esp32dev, no upload)
+        run: pio run -e esp32dev
