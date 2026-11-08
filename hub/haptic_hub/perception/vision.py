@@ -160,6 +160,8 @@ class VisionPerception:
             confident = cfg.confident_conf
             debug["boxes"] = [b for b in boxes if b.confidence >= confident]
             debug["uncertain_boxes"] = [b for b in boxes if b.confidence < confident]
+            track_ttc = {}
+            debug["track_ttc"] = track_ttc
             best_box_height = [0.0] * n
             for box in boxes:
                 if box.height / h < cfg.min_box_height:
@@ -172,6 +174,8 @@ class VisionPerception:
                     for s in sectors:  # reported, never used for risk
                         uncertain[s] = True
                     continue
+                if box.track_id is not None and box_ttc is not None:
+                    track_ttc[box.track_id] = box_ttc
                 box_risk = linear_risk(box_ttc, cfg.ttc_near_s, cfg.ttc_far_s)
                 for s in sectors:
                     if box_risk > risk[s]:

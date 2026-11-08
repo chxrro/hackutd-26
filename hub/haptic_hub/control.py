@@ -7,6 +7,8 @@ One Control object owns the settings and is the only place they change:
                status says ``healthy: false, reason: "alerts paused"``. Resuming
                plays the resume cue (cues.py).
   belt_test    a bounded left-to-right sweep (<= 3 s), refused while paused
+  practice_cue one stationary left, right, or fault example before a session
+               or after a deliberate stop
   stopped      the wearer pressed Stop (``end_session``, paired only): the belt
                plays the session-ended cue once, then stays quiet; status says
                ``healthy: false, reason: "stopped by wearer"``. The next frame, or
@@ -51,6 +53,7 @@ log = logging.getLogger(__name__)
 
 PAUSED_REASON = "alerts paused"
 BELT_TEST_REASON = "belt test"
+PRACTICE_REASON = "belt practice"
 RESUME_REASON = "resuming alerts"
 STOPPED_REASON = "stopped by wearer"
 NOT_PAIRED = "not paired"
@@ -75,6 +78,8 @@ ALERT_RANGES: dict[str, AlertRange] = {
 BELT_TEST_STEP_S = 0.4  # each motor in turn, left to right
 BELT_TEST_LEVEL = 200
 BELT_TEST_MAX_S = 3.0  # hard bound, whatever the motor count
+PRACTICE_LEAD_S = 0.2
+PRACTICE_CUE_S = 0.7
 
 SETTING_KEYS = ("classifier", "alert_range", "record")
 
@@ -127,6 +132,8 @@ class Control:
         self.record = False
         self.alert_range = self._matching_range()
         self._test_started: float | None = None
+        self._practice: tuple[str, float] | None = None
+        self._session_seen = False
         # Cue timelines start on the belt loop's clock, at the first tick that can play them.
         self._pause_started: float | None = None  # this quiet paused stretch (cue, then reminders)
         self._resume_pending = False
@@ -190,6 +197,7 @@ class Control:
                 log.info("control: alerts paused")
                 self._pause_started, self._resume_pending = None, False
             self.paused, self._test_started = True, None
+            self._practice = None
             return None
         if action == "resume":
             if self.paused:
@@ -202,6 +210,8 @@ class Control:
             return None
         if action == "belt_test":
             return self._start_belt_test()
+        if action == "practice_cue":
+            return self._start_practice(msg.get("cue"))
         if action == "set":
             return await self._set(msg.get("settings"))
         return "unknown action"
@@ -214,9 +224,12 @@ class Control:
             self._stop_cue_started = None
         self.stopped, self._stopped_at = True, self._clock()
         self.paused, self._test_started = False, None
+        self._practice = None
         self._pause_started, self._resume_pending, self._resume_started = None, False, None
 
     def _start_session(self, why: str) -> None:
+        self._session_seen = True
+        self._practice = None
         if not self.stopped:
             return
         log.info("control: new session (%s)", why)
@@ -229,13 +242,15 @@ class Control:
         """The hub's belt loop reports the newest frame's receive time (same clock as
         Control's). A frame that arrived after end_session starts a new session; one
         from before it doesn't, so frames already in flight can't undo a stop."""
-        if self.stopped and self._stopped_at is not None and received_at > self._stopped_at:
+        if not self.stopped:
+            self._session_seen = True
+        elif self._stopped_at is not None and received_at > self._stopped_at:
             self._start_session("camera frames resumed")
 
     def _start_belt_test(self) -> str | None:
         if self.paused:
             return "refused while paused"
-        if self.belt_test_running():
+        if self.belt_test_running() or self._practice is not None:
             return "belt test already running"
         if self.belt_state is not None and belt_link_reason(self.belt_state) is not None:
             return "belt not connected"
@@ -243,6 +258,24 @@ class Control:
             return self.belt_fault
         self._test_started = self._clock()
         log.info("control: belt test")
+        return None
+
+    def _start_practice(self, cue: Any) -> str | None:
+        if cue not in ("left", "right", "fault"):
+            return "practice cue must be left, right, or fault"
+        if self.paused or (self._session_seen and not self.stopped):
+            return "stop alerts before practicing"
+        if self.belt_state not in ("connected", "simulated") or self.belt_fault is not None:
+            return "belt not ready"
+        if self.belt_test_running() or self._practice is not None:
+            return "belt test already running"
+        now = self._clock()
+        if not self.stopped:
+            # The hub has never seen a session. Start practice from a quiet belt.
+            self._end_session()
+        # Practice takes over from the stop cue and returns to quiet afterward.
+        self._stop_cue_started = now - cues.duration(cues.session_end_cue(self.cfg.perception.sectors))
+        self._practice = (cue, now)
         return None
 
     async def _set(self, settings: Any) -> str | None:
@@ -372,6 +405,19 @@ class Control:
         motors, ttl = len(cmd.levels), cmd.ttl_ms
         link = belt_link_reason(belt_state)
         unconfirmed = belt_fault if link is None else None
+        if self._practice is not None:
+            cue, started = self._practice
+            elapsed = now - started
+            if (belt_state in ("connected", "simulated") and unconfirmed is None
+                    and elapsed < PRACTICE_LEAD_S + PRACTICE_CUE_S):
+                if elapsed < PRACTICE_LEAD_S:
+                    return BeltCommand.off(motors, ttl), PRACTICE_REASON
+                if cue == "fault":
+                    return BeltCommand.fault(motors, ttl), PRACTICE_REASON
+                motor = 0 if cue == "left" else motors - 1
+                levels = tuple(BELT_TEST_LEVEL if i == motor else 0 for i in range(motors))
+                return _levels(levels, ttl), PRACTICE_REASON
+            self._practice = None
         if (link or unconfirmed) is not None and self._test_started is not None:
             log.info("control: belt test stopped (%s)", link or unconfirmed)
             self._test_started = None

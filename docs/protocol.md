@@ -174,10 +174,18 @@ connection. The code changes every time the hub restarts.
 | `pause`     | none | Obstacle alerts stop. The belt plays the **pause cue**, then a **paused reminder** pulse every 15 s (see "Belt cues" in section 3). Status shows `healthy: false`, `reason: "alerts paused"`, `paused: true`. |
 | `resume`    | none | The belt plays the **resume cue** (≤ 0.6 s, status `reason: "resuming alerts"`), then back to normal. |
 | `belt_test` | none | The hub plays a short sweep across the motors (≤ 3 s), then goes back to normal. Refused while paused, while a test is running, or while the belt is disconnected. |
+| `practice_cue` | `cue` | Plays one stationary example. Use `left`, `right`, or `fault`. The hub accepts it before the first session or after a deliberate stop, with a ready belt and no other test in progress. |
 | `end_session` | none | Added 2026-11-08. The wearer pressed Stop. The belt plays the **session-ended cue** once, then stays quiet. Status: `healthy: false`, `reason: "stopped by wearer"`, `stopped: true`. See "Deliberate stop" below. |
 | `set`       | `settings` object, one or more keys below | Change settings. Unknown keys reject the whole request. |
 
 `pause` and `resume` are idempotent. `pause` also stops a running belt test.
+
+Practice starts with 0.2 s of quiet, then sends one outer motor level or the
+firmware's fault mode for up to 0.7 s. The status reason is `belt practice`
+with `healthy: false`. The belt returns to its stopped state. A new session
+or belt link problem ends practice immediately. Older hubs may refuse the
+action as unknown. Firmware commands and their timeouts use the existing
+belt protocol.
 
 While paused, a real fault takes priority on the belt and in `reason`. The belt
 plays the fault pattern, and `"no camera frames for 1.2 s"`,
@@ -447,3 +455,29 @@ the reminder. None of this has been felt on a real belt yet.
    the belt goes silent to save battery.
 3. Before the first command after boot, the belt is silent (after a short
    power-on self-test sweep).
+
+## Optional spoken obstacle status (hub → iPhone)
+
+In a `status` message, `spoken_obstacle` is either `null` or an object such as:
+
+```json
+{"sector": 2, "kind": "person", "distance_m": 2.4, "closing": true, "urgent": false}
+```
+
+`sector` is the zero-based index in `levels`. `kind` is `person`, `object`, or
+`obstacle` for a hazard detected by depth without a matched confident label.
+`distance_m` is estimated depth in meters. It comes from the same box for a
+named alert and from the active sector for a depth-only alert. It is `null` if
+there is no usable distance. The iPhone rounds it to feet for speech.
+`closing` means box growth or optical flow on that track indicates the gap may
+be closing. It does not identify who is moving. Optional `urgent` means the
+alert reached the full-risk threshold for distance or approach. An absent
+value means routine speech.
+
+The hub reports at most one candidate, ranked by current depth or approach
+risk, from an active alert sector. It sends `null` during stale data, faults, or
+belt cues, or if there is no usable depth or approach evidence. Uncertain
+boxes do not create named alerts. An independent depth hazard can still be
+announced. Older hubs omit `spoken_obstacle` and supply `sectors[i].kind`.
+Earlier clients that support spoken status can ignore `urgent` and skip
+unrecognized kinds. These fields do not change haptic commands.
