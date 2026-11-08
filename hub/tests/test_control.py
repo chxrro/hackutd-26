@@ -386,6 +386,79 @@ def test_pause_cancels_a_running_belt_test():
     assert c.apply(LEVELS, OK, "simulated", clock.t + 0.1)[1] == PAUSED_REASON
 
 
+# -- belt not acknowledging (Belt.fault) ---------------------------------------
+
+NOT_ACK = "belt not acknowledging"
+
+
+def test_belt_not_acknowledging_is_unhealthy_and_sends_the_fault_pattern():
+    c = Control(HubConfig())
+    cmd, reason = c.apply(LEVELS, OK, "connected", 0.0, NOT_ACK)
+    assert reason == NOT_ACK and cmd.mode == BeltMode.FAULT  # if a write gets through, it's the fault pattern
+    assert c.apply(LEVELS, OK, "connected", 0.1) == (LEVELS, None)  # recovers as soon as the belt does
+
+
+def test_belt_link_down_is_unhealthy_even_when_not_paused():
+    c = Control(HubConfig())
+    assert c.apply(LEVELS, OK, "disconnected", 0.0)[1] == "belt disconnected"
+    assert c.apply(LEVELS, OK, "connecting", 0.1)[1] == "belt connecting"
+    assert c.apply(LEVELS, OK, "connected", 0.2) == (LEVELS, None)
+
+
+@pytest.mark.parametrize("paused", [False, True])
+def test_reason_precedence_input_fault_then_link_then_not_acknowledging_then_pause(paused):
+    c = Control(HubConfig())
+    if paused:
+        ack(c, {"type": "control", "id": 1, "action": "pause"})
+    stale = Health(False, "no camera frames for 1.2 s")
+    fault = BeltCommand.fault(5)
+    assert c.apply(fault, stale, "disconnected", 0.0, NOT_ACK) == (fault, stale.reason)
+    assert c.apply(fault, stale, "connected", 0.1, NOT_ACK) == (fault, stale.reason)
+    # a link that is down outranks (and makes moot) "not acknowledging"
+    assert c.apply(LEVELS, OK, "disconnected", 0.2, NOT_ACK)[1] == "belt disconnected"
+    cmd, reason = c.apply(LEVELS, OK, "connected", 0.3, NOT_ACK)
+    assert reason == NOT_ACK and cmd.mode == BeltMode.FAULT
+    assert c.settings()["paused"] is paused  # a fault doesn't unpause
+
+
+def test_pause_cue_replays_after_belt_acknowledges_again():
+    c = Control(HubConfig())
+    ack(c, {"type": "control", "id": 1, "action": "pause"})
+    quiet_from = _quiet_after_cue(c, 0.0)
+    ticks = [(t, *c.apply(LEVELS, OK, "connected", quiet_from + t, NOT_ACK)) for t in (0.0, 0.5, 1.0)]
+    assert all(cmd.mode == BeltMode.FAULT and reason == NOT_ACK for _, cmd, reason in ticks)
+    replay = [cmd.levels for _, cmd, _ in _play(c, quiet_from + 1.1, 0.8) if any(cmd.levels)]
+    assert _rings_in_order(replay) == [(0, 4), (1, 3), (2,)]  # "still paused", not "all clear"
+
+
+def test_resume_cue_waits_for_the_belt_to_acknowledge():
+    c = Control(HubConfig())
+    ack(c, {"type": "control", "id": 1, "action": "pause"})
+    _quiet_after_cue(c, 0.0)
+    ack(c, {"type": "control", "id": 2, "action": "resume"})
+    _play(c, 5.0, 0.2)  # cue under way ...
+    for t in (5.2, 5.5, 5.8):  # ... then the belt stops acknowledging
+        cmd, reason = c.apply(LEVELS, OK, "connected", t, NOT_ACK)
+        assert cmd.mode == BeltMode.FAULT and reason == NOT_ACK
+    ticks = _play(c, 6.0, 1.0)
+    assert ticks[0][2] == RESUME_REASON  # the cue plays from the start once the belt hears us
+    assert ticks[-1][1:] == (LEVELS, None)
+
+
+def test_belt_test_refused_and_stopped_when_belt_not_acknowledging():
+    clock = FakeClock()
+    c = Control(HubConfig(), clock=clock)
+    c.apply(LEVELS, OK, "connected", clock.t, NOT_ACK)
+    assert ack(c, {"type": "control", "id": 1, "action": "belt_test"})["error"] == NOT_ACK
+    c.apply(LEVELS, OK, "connected", clock.t)
+    assert ack(c, {"type": "control", "id": 2, "action": "belt_test"})["ok"]
+    assert c.apply(LEVELS, OK, "connected", clock.t + 0.1)[1] == "belt test"
+    # the belt stops hearing us mid-test: the test ends rather than hiding the fault
+    assert c.apply(LEVELS, OK, "connected", clock.t + 0.2, NOT_ACK)[1] == NOT_ACK
+    assert c.apply(LEVELS, OK, "connected", clock.t + 0.3) == (LEVELS, None)
+    assert not c.belt_test_running(clock.t + 0.3)
+
+
 # -- classifier ---------------------------------------------------------------
 
 
@@ -544,6 +617,37 @@ def test_hub_fault_overrides_pause_when_frames_stop():
     _, (mode, s) = _run_hub(hub, [pause, later], 0.5)
     assert s["reason"].startswith("no camera frames") and s["paused"] is True and s["healthy"] is False
     assert mode == BeltMode.FAULT and s["mode"] == "fault"  # a real fault wins over pause on the belt too
+
+
+class UnconfirmedBelt(SimBelt):
+    """A belt whose link is up but which isn't acknowledging writes (Belt.fault)."""
+
+    state = "connected"
+    fault = None
+
+
+def test_hub_status_reports_belt_not_acknowledging_and_recovers():
+    belt = UnconfirmedBelt(5)
+    hub = Hub(HubConfig(), FakeSource(seconds=30), SweepPerception(5), belt)
+
+    async def healthy(h):
+        return h.status()
+
+    async def lose(h):
+        belt.fault = "belt not acknowledging"
+        await asyncio.sleep(0.2)
+        return belt.last.mode, h.status()
+
+    async def recover(h):
+        belt.fault = None
+        await asyncio.sleep(0.2)
+        return h.status()
+
+    s0, (mode, s1), s2 = _run_hub(hub, [healthy, lose, recover], 0.6)
+    assert s0["healthy"] is True
+    assert s1["healthy"] is False and s1["reason"] == "belt not acknowledging" and s1["belt"] == "connected"
+    assert mode == BeltMode.FAULT and s1["mode"] == "fault"
+    assert s2["healthy"] is True and s2["reason"] is None
 
 
 def test_hub_belt_test_plays_then_returns_to_normal():

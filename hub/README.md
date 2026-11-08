@@ -28,7 +28,8 @@ haptic_hub/
   control.py         runtime settings for the phone / dashboard: pause, belt test,
                      alert range, classifier; pairing code (docs/protocol.md "Control")
   belt/              where commands go
-    ble.py             the ESP32 over BLE (bleak)
+    ble.py             the ESP32 over BLE (bleak); writes with response and reconnects
+    confirm.py         acknowledged-write tracking: "belt not acknowledging" after one TTL
     sim.py             simulator
   viz.py             --show debug window (render() also draws the dashboard preview)
   dashboard/         --dashboard: operator page on http://127.0.0.1:8780/ (plain HTML/JS)

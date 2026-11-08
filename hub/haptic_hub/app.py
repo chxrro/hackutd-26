@@ -120,7 +120,8 @@ class Hub:
             health = self.safety.check(started)
             self.health = health
             command = self.policy.command(self.result, health)
-            self.command, reason = self.control.apply(command, health, self.belt.state, started)
+            belt_fault = getattr(self.belt, "fault", None)  # e.g. "belt not acknowledging"
+            self.command, reason = self.control.apply(command, health, self.belt.state, started, belt_fault)
             if reason != self.reason:
                 log.info("health: %s", "ok" if reason is None else reason)
             self.reason = reason
