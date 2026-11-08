@@ -40,6 +40,14 @@ targets:
       - path: HapticBelt/Hub/FramePacket.swift
       - path: HapticBelt/Hub/HubMessages.swift
       - path: HapticBelt/Hub/HubAddress.swift
+      - path: HapticBelt/Forwarding/FrameRateLimiter.swift
+      - path: HapticBelt/Haptics/PhoneHapticPolicy.swift
+      - path: HapticBelt/Alerts/AlertAssessment.swift
+      - path: HapticBelt/Alerts/SpeechPolicy.swift
+      - path: HapticBelt/Alerts/AlertPatterns.swift
+      - path: HapticBelt/Belt/BeltProtocol.swift
+      - path: HapticBelt/Belt/BeltRelayPolicy.swift
+      - path: HapticBelt/Belt/BeltClient.swift
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES

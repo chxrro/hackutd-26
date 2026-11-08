@@ -5,14 +5,20 @@
 //
 
 import SwiftUI
+import AVKit
 
 struct ContentView: View {
   @Bindable var model: AppModel
+  @Environment(\.scenePhase) private var scenePhase
 
   var body: some View {
     NavigationStack {
       Form {
-        GlassesSection(glasses: model.glasses, preview: model.preview)
+        SpeechSection(model: model)
+        PhoneVibrationSection(model: model)
+        PatternPracticeSection(model: model)
+        BeltBluetoothSection(model: model)
+        GlassesSection(glasses: model.glasses, preview: model.preview, stopCamera: model.stopCamera)
         HubSection(model: model)
         BeltSection(model: model)
         Section {
@@ -23,6 +29,7 @@ struct ContentView: View {
       }
       .navigationTitle("Haptic Belt")
     }
+    .onChange(of: scenePhase, initial: true) { _, phase in model.setAppActive(phase == .active) }
     .alert(
       "Glasses",
       isPresented: Binding(
@@ -45,11 +52,114 @@ struct ContentView: View {
   }
 }
 
+private struct AudioOutputPicker: UIViewRepresentable {
+  let output: SpeechOutput
+
+  func makeCoordinator() -> Coordinator { Coordinator(output: output) }
+  func makeUIView(context: Context) -> AVRoutePickerView {
+    let view = AVRoutePickerView()
+    view.prioritizesVideoDevices = false
+    view.delegate = context.coordinator
+    view.accessibilityLabel = "Choose audio output"
+    return view
+  }
+  func updateUIView(_ view: AVRoutePickerView, context: Context) {}
+
+  final class Coordinator: NSObject, AVRoutePickerViewDelegate {
+    let output: SpeechOutput
+    init(output: SpeechOutput) { self.output = output }
+    func routePickerViewDidEndPresentingRoutes(_ routePickerView: AVRoutePickerView) {
+      let output = output
+      Task { @MainActor in output.refreshRoute() }
+    }
+  }
+}
+
+private struct SpeechSection: View {
+  @Bindable var model: AppModel
+
+  var body: some View {
+    Section {
+      Button("Test glasses speech") { model.testGlassesSpeech() }
+      HStack {
+        Text("Choose audio output")
+        Spacer()
+        AudioOutputPicker(output: model.speechOutput)
+          .frame(width: 44, height: 44)
+          .task { _ = model.speechOutput.prepare(requestRoute: false) }
+      }
+      LabeledContent("Audio output", value: model.speechOutput.routeName)
+      LabeledContent("Audio volume", value: "\(Int(model.speechOutput.volume * 100))%")
+      Toggle("Speak obstacle alerts", isOn: Binding(
+        get: { model.speechEnabled }, set: { model.setSpeechEnabled($0) }))
+      Toggle("Include object and motion", isOn: $model.detailedSpeech)
+      Toggle("Repeat ongoing alerts", isOn: $model.speechReminders)
+      Button("Repeat current alert") { model.repeatCurrentAlert() }
+        .disabled(!model.speechEnabled || !model.speechOutput.bluetoothReady)
+      Text(model.speechOutput.error ?? model.speechStatus)
+        .foregroundStyle(model.speechOutput.error == nil ? Color.primary : Color.red)
+      Text(model.speechOutput.playbackStatus)
+        .font(.footnote)
+      Text("Last requested: \(model.speechOutput.lastPhrase)")
+        .font(.footnote)
+    } header: {
+      Text("Glasses speech")
+    } footer: {
+      Text("Choose your glasses as the audio output using the picker above. Bluetooth pairing alone does not select audio. Test while the camera is running. Directions follow the camera, not your torso. Speech describes obstacles, not where to walk. Automatic speech pauses for VoiceOver. Keep the app open.")
+    }
+  }
+}
+
+private struct PhoneVibrationSection: View {
+  @Bindable var model: AppModel
+
+  var body: some View {
+    Section {
+      Toggle("Vibrate phone for alerts", isOn: Binding(
+        get: { model.phoneVibrationEnabled }, set: { model.setPhoneVibrationEnabled($0) }))
+        .disabled(!model.phoneHaptics.supported)
+      Text(model.phoneHaptics.error ?? model.phoneVibrationStatus)
+        .foregroundStyle(model.phoneHaptics.error == nil ? Color.primary : Color.red)
+      Button("Test phone vibration") { model.testPhoneVibration() }
+        .disabled(!model.phoneHaptics.supported)
+      VStack(alignment: .leading) {
+        Text("Phone strength: \(Int(model.phoneStrength * 100))%")
+        Slider(value: $model.phoneStrength, in: 0.2...1, step: 0.1)
+          .accessibilityLabel("Phone vibration strength")
+          .accessibilityValue("\(Int(model.phoneStrength * 100)) percent")
+      }
+    } header: {
+      Text("Phone vibration")
+    } footer: {
+      Text("Single buzz = obstacle. Faster double buzz = higher urgency. Three taps = alerts unavailable. Voice gives obstacle direction; the phone cannot reproduce the belt's left/right cues. Strength changes the phone only. Keep the app open.")
+    }
+  }
+}
+
+private struct PatternPracticeSection: View {
+  @Bindable var model: AppModel
+
+  var body: some View {
+    Section("Learn the alert patterns") {
+      Picker("Pattern", selection: $model.patternSample) {
+        ForEach(AlertPatternSample.allCases) { sample in
+          Text(sample.title).tag(sample)
+        }
+      }
+      Button("Play selected test") { model.testAlertPattern() }
+      Text(model.patternTestStatus).font(.footnote)
+      Text("Hold the phone while stationary. Tests are labeled aloud through your selected Bluetooth output. Re-enable automatic alerts when finished.")
+        .font(.footnote).foregroundStyle(.secondary)
+    }
+  }
+}
+
 // MARK: - Glasses
 
 private struct GlassesSection: View {
   let glasses: GlassesController
   let preview: UIImage?
+  let stopCamera: () -> Void
 
   var body: some View {
     Section("Glasses") {
@@ -63,7 +173,7 @@ private struct GlassesSection: View {
         LabeledContent("Glasses", value: glasses.hasActiveDevice ? "available" : "not detected")
         LabeledContent("Camera", value: glasses.streamStateText)
         if glasses.wantsStream {
-          Button("Stop camera", role: .destructive) { glasses.stop() }
+          Button("Stop camera", role: .destructive, action: stopCamera)
         } else {
           Button("Start camera") { glasses.start() }
             .disabled(!glasses.canStart)
@@ -102,8 +212,11 @@ private struct HubSection: View {
       )
       LabeledContent("Link", value: Self.describe(model.hubState))
       LabeledContent("Frames sent", value: "\(model.stats.sent)")
+      LabeledContent("Camera / sent fps", value: String(format: "%.1f / %.1f", model.cameraFps, model.sentFps))
+      LabeledContent("Encode / send ms", value: String(format: "%.1f / %.1f", model.encodeMs, model.sendMs))
       if model.stats.dropped + model.stats.failed > 0 {
         LabeledContent("Dropped / failed", value: "\(model.stats.dropped) / \(model.stats.failed)")
+        LabeledContent("Rate limit / busy drops", value: "\(model.stats.throttled) / \(model.stats.busy)")
       }
     } header: {
       Text("Hub")
@@ -130,18 +243,18 @@ private struct BeltSection: View {
   let model: AppModel
 
   var body: some View {
-    Section("Belt") {
+    Section("Hub prediction") {
       TimelineView(.periodic(from: .now, by: 1)) { context in
         if let status = model.hubStatus, model.isStatusFresh(now: context.date) {
           VStack(alignment: .leading, spacing: 10) {
             Label(
-              status.healthy ? "Alerts active" : "Not reliable: \(status.reason ?? "unknown")",
+              status.healthy ? "Hub input healthy" : "Not reliable: \(status.reason ?? "unknown")",
               systemImage: status.healthy ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
             )
             .foregroundStyle(status.healthy ? .green : .orange)
             LevelBars(levels: status.levels, mode: status.mode)
             HStack {
-              Text("belt: \(status.belt)")
+              Text("Hub belt transport: \(status.belt)")
               Spacer()
               if let ms = status.inferenceMs { Text("model \(Int(ms)) ms") }
             }

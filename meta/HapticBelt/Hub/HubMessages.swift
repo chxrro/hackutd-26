@@ -16,9 +16,11 @@ struct HubStatus: Decodable, Equatable, Sendable {
   let source: String?
   let inferenceMs: Double?
   let frameAgeMs: Double?
+  let hazards: HazardSnapshot?
+  let hazardsInvalid: Bool
 
   enum CodingKeys: String, CodingKey {
-    case type, mode, healthy, reason, levels, belt, source
+    case type, mode, healthy, reason, levels, belt, source, hazards
     case inferenceMs = "inference_ms"
     case frameAgeMs = "frame_age_ms"
   }
@@ -36,6 +38,13 @@ struct HubStatus: Decodable, Equatable, Sendable {
     source = try c.decodeIfPresent(String.self, forKey: .source)
     inferenceMs = try c.decodeIfPresent(Double.self, forKey: .inferenceMs)
     frameAgeMs = try c.decodeIfPresent(Double.self, forKey: .frameAgeMs)
+    if c.contains(.hazards) {
+      hazards = try? c.decode(HazardSnapshot.self, forKey: .hazards)
+      hazardsInvalid = hazards == nil
+    } else {
+      hazards = nil
+      hazardsInvalid = false
+    }
   }
 
   /// Returns nil for anything that isn't a well-formed status message.
