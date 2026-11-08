@@ -16,10 +16,11 @@ WINDOW = "haptic hub"
 class DebugView:
     def __init__(self, width: int = 480) -> None:
         self.width = width
+        self.latency_line: str | None = None  # set by the hub every few seconds
 
     def show(self, frame: Frame, result: PerceptionResult, cmd: BeltCommand, reason: str | None) -> bool:
         """Draws one frame. Returns False if the user pressed q or Esc."""
-        cv2.imshow(WINDOW, render(frame, result, cmd, reason, self.width))
+        cv2.imshow(WINDOW, render(frame, result, cmd, reason, self.width, footer=self.latency_line))
         return cv2.waitKey(1) & 0xFF not in (ord("q"), 27)
 
     def close(self) -> None:
@@ -34,9 +35,11 @@ def render(
     width: int = 480,
     panel: bool = True,
     banner: bool = True,
+    footer: str | None = None,
 ) -> np.ndarray:
     """The --show picture as a BGR image: frame scaled to `width`, sector lines, labelled
-    boxes, and (optionally) the motor panel below and the mode/fault banner on top.
+    boxes, and (optionally) the motor panel below, the mode/fault banner on top and a
+    `footer` line at the bottom of the frame (--show: the latency summary).
     Pure: no window, safe to call from any thread."""
     img = frame.image
     scale = width / img.shape[1]
@@ -51,6 +54,8 @@ def render(
         p2 = (int(box.x2 * box_scale), int(box.y2 * box_scale))
         cv2.rectangle(img, p1, p2, color, 2)
         cv2.putText(img, text, (p1[0], p1[1] - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+    if footer:
+        cv2.putText(img, footer, (6, h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
     if banner and (classifier := _classifier_line(result.debug)) is not None:
         cv2.putText(img, classifier, (6, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
 

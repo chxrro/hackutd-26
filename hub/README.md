@@ -12,6 +12,7 @@ haptic_hub/
   sources/           where frames come from
     glasses.py         WebSocket server for the phone (default)
     camera.py          webcam, video file, or live network stream (OpenCV/FFmpeg)
+    replay.py          plays back a --record session (replay:DIR)
   perception/        frame -> risk per sector
     vision.py          fuses depth + tracked objects
     models.py          Depth Anything V2 and YOLO + ByteTrack wrappers
@@ -20,6 +21,7 @@ haptic_hub/
     sweep.py           fake obstacle for bench tests
     classify.py        person vs. object label per tracked box (--classifier)
     nim.py             the same labels from a Nemotron vision model (cloud)
+    openvocab.py       detector that finds hazards by text prompt (--detector openvocab)
   haptics.py         risk -> motor levels (instant rise, slow fade, deadband)
   safety.py          when to send the fault pattern instead of levels
   control.py         runtime settings for the phone / dashboard: pause, belt test,
@@ -29,6 +31,8 @@ haptic_hub/
     sim.py             simulator
   viz.py             --show debug window (render() also draws the dashboard preview)
   dashboard/         --dashboard: operator page on http://127.0.0.1:8780/ (plain HTML/JS)
+  record.py          opt-in frame recording (--record), wraps any source
+  latency.py         per-stage hub latency, logged every 5 s
 ```
 
 ## Setup
@@ -74,7 +78,9 @@ uv run haptic-hub run --source webcam --belt sim --dashboard
 ```
 
 Options: `--perception depth|detector` runs one model only (faster),
-`--outdoor` uses the outdoor depth model, `--device mps|cuda|cpu`.
+`--detector openvocab` finds hazards by text prompt (see below),
+`--outdoor` uses the outdoor depth model, `--device mps|cuda|cpu`,
+`--motion flow` adds optical-flow approach/crossing (experimental, below).
 
 macOS asks for Bluetooth permission (for BLE) and camera permission (for
 `--source webcam`) for your terminal app the first time.
@@ -123,7 +129,7 @@ servers don't log message payloads.
 | belt test | Each motor in turn, left to right, 0.4 s each (2 s for 5 motors, never over 3 s). Refused while paused. Status reason `"belt test"`. Real alerts are replaced by the sweep for those ≤ 3 s, so don't run it on a walk. |
 | classifier | `local` ⇄ `nim` at runtime. `nim` is only allowed if the hub started with a cloud endpoint (`--classifier nim`, `--nim-url`, `--nim-env`, or `NIM_BASE_URL` / `NIM_API_KEY` / `NVIDIA_API_KEY`). Each switch to `nim` probes the endpoint again; if that fails, nothing changes. |
 | alert range | Presets for where alerts start (below). |
-| record | Not implemented yet: `true` is refused with `"recording not available"`. |
+| record | Not wired to the control layer yet: `true` is refused with `"recording not available"`. Start the hub with `--record` instead (see Recording and replay). |
 
 Alert range presets. **Unvalidated**: they only move where the risk ramps
 start. `near_m` (0.6 m) and `ttc_near_s` (1 s), where risk is full, don't
@@ -134,6 +140,77 @@ change.
 | `near` | 1.5 m | 2.0 s |
 | `normal` (default, = `config.py`) | 2.5 m | 3.0 s |
 | `far` | 3.5 m | 4.0 s |
+
+## Recording and replay
+
+Recording is **off** unless you pass `--record`. It works with any source
+(glasses, webcam, video, stream, even a replay) and doesn't change how the
+source behaves.
+
+```bash
+# Record a glasses session (prints "RECORDING ON: ... session-001")
+uv run haptic-hub run --record
+
+# Replay it through the same pipeline at its original timing
+uv run haptic-hub run --source replay:recordings/session-001 --belt sim --show
+```
+
+Each session goes to the next numbered folder, `hub/recordings/session-NNN/`
+(git-ignored; `--record-dir` changes the parent folder):
+
+- `000001.jpg`, ... the frames as the hub decoded them, re-encoded as JPEG (quality 90)
+- `frames.jsonl` one line per saved frame: `seq` (the sender's), `file`,
+  `received_at` (hub `time.monotonic()`, s), `t` (s since recording started),
+  `capture_ms` (the sender's clock, **not** synchronized with the hub; `null`
+  if the source has none), `source`, `width`, `height`
+- `session.json` source, start time, limits, and on exit the frames written /
+  dropped and why recording stopped
+
+Limits: recording stops after `--record-minutes` (10) or `--record-max-frames`
+(6000) saved frames, whichever comes first. The hub keeps running.
+`--record-every K` saves every K-th frame. Frames are written by a background
+thread through a 16-frame queue. If the disk falls behind, the hub drops the
+*recorded copy* and logs it, so perception and the belt heartbeat never wait
+on the disk. Frames from the glasses are decoded and re-encoded, so recorded
+JPEGs are not byte-identical to what the phone sent.
+
+Replay (`--source replay:DIR`) plays a session once at the hub receive timing
+it was recorded with, then stops sending frames, so the belt goes to the fault
+pattern like a dropped camera. The status `source`, logs and the `--show`
+banner say `replay:session-NNN`, so a replay can't pass as a live run. Replayed
+frames get a fresh hub receive time and no `capture_ms`.
+
+Recordings can show people's faces and places. Get consent, don't commit or
+share them, and delete them when done.
+
+## Latency
+
+Every 5 s the hub logs one line of per-stage timings on its own clock
+(median/p90 in ms over that window). For example, `--perception vision` on
+an M-series MacBook (MPS) playing a 20 fps synthetic video made from one still
+photo (not glasses footage, not a validated figure):
+
+```text
+[video:bus_approach.mp4] latency ms p50/p90 | 5s: in 18.8 fps, perception 18.8 fps, dropped 0 | queue 0/0 | infer 34/37 | to belt 26/48 | hub total 61/82 | capture->recv (unsynced clocks, info only) 0/1
+```
+
+The same model was slower in other runs on the same laptop (inference p90
+150–210 ms, perception 6–12 fps with frames dropped), so read the line during
+your own run rather than relying on these numbers.
+
+- `in` frames reaching the hub per second; `perception` results per second;
+  `dropped` frames replaced in the 1-slot buffer before perception took them.
+- `queue` receive → perception start. `infer` the model's own time.
+  `to belt` perception done → the first belt command sent after it (the belt
+  loop ticks at 15 Hz, so expect about half a tick). It is when the hub hands
+  the command to BLE, not when the motor moves. `hub total` receive → that command.
+- `capture->recv (unsynced clocks, info only)` appears when the sender stamps
+  `capture_ms` (the phone does). The phone's clock isn't synchronized with
+  the laptop's, so it includes the clock offset and can even be negative.
+  Don't quote it as network latency.
+
+`--show` draws a short version at the bottom of the window. None of this is
+sent to the phone: the status message is unchanged (`docs/protocol.md`).
 
 ## People vs. objects
 
@@ -157,7 +234,8 @@ draws people in magenta (`PERSON #3 (local)`) and objects in orange
   ever drive the belt, an unavailable classifier has to become a fault.
 
 Objects the detector doesn't know (walls, poles, curbs) produce no box, so they
-get no label. They are only covered by the depth risk.
+get no label. They are only covered by the depth risk. `--detector openvocab`
+(below) finds some of them.
 
 ### Cloud endpoint
 
@@ -216,6 +294,83 @@ long chain of thought before every answer. Stop the instance (`brev stop <instan
 when you're done. It bills while it runs, and storage still bills until you
 delete it.
 
+## Hazards by text prompt (`--detector openvocab`)
+
+YOLO11n only knows the 80 COCO classes: no pole, bollard, door, stairs, curb,
+trash can or wall. `--detector openvocab` swaps it for
+[YOLOE](https://docs.ultralytics.com/models/yoloe/) prompted with a list of
+words. It returns the same tracked boxes (ByteTrack IDs), so TTC, sector risk,
+the belt and the person/object labels work unchanged. A box's label is the
+prompt it matched; `person` (also `pedestrian`, `people`) maps to **person**,
+everything else to **object**. `person` is always in the list.
+
+```bash
+uv run haptic-hub run --source webcam --belt sim --show --detector openvocab
+uv run haptic-hub run --source video:walk.mp4 --belt sim --detector openvocab \
+    --prompts "person,pole,bollard,door,stairs,raised curb,trash can"
+```
+
+Defaults are in `config.py` (`openvocab_model`, `openvocab_prompts`,
+`openvocab_conf` = 0.25). The first run downloads `yoloe-26s-seg.pt` (31 MB)
+and the MobileCLIP2 text encoder `mobileclip2_b.ts` (254 MB) into the current
+directory (both gitignored). The encoder only runs at startup to turn the
+prompts into embeddings (~0.5 s once downloaded). The new `vision` dependency
+is `clip` (Ultralytics' fork of OpenAI CLIP, pinned by commit in
+`pyproject.toml`), which provides the tokenizer.
+
+**Licences.** YOLOE code and weights are AGPL-3.0, like YOLO11n.
+MobileCLIP2 is under Apple's *ML Research Model* terms: non-commercial research
+only. That may be fine for this prototype, but check it before any other use.
+Setting `openvocab_model = "yolov8s-worldv2.pt"` (YOLO-World, also supported)
+uses OpenAI CLIP (MIT) instead, a 338 MB download to `~/.cache/clip`.
+
+### Measured (2026-11-07, replayed stills, not live video)
+
+Apple M4 Max, MPS, other jobs running (load average ~6–7). Frames at
+`infer_width` 384, model input at the default 640. Median / p90 ms per frame.
+Each image was held for 20+ frames, like a camera, after warm-up.
+
+| What was timed | YOLO11n | YOLOE-26n | **YOLOE-26s** (default) | YOLO-World v2-s |
+|---|---|---|---|---|
+| detector `track()` alone | 9.2 / 11.3 | 13.7 / 17.8 | 17.7 / 22.2 | 12.4 / 15.1 |
+| `--perception detector`, whole step | 18.3 / 25.7 | 26.1 / 34.6 | 28.9 / 34.8 | – |
+| `--perception vision` (+ depth) | 40.4 / 45.7 | 45.4 / 53.7 | 56.1 / 64.7 | – |
+
+The whole-step rows include about 7 ms to shrink a ~1 MP still to 384 px (existing
+code, same for every detector). At 15 Hz the budget is 67 ms. `vision` +
+YOLOE-26s fits at the median but leaves little headroom: p90 is 65 ms and the
+max was 93 ms. If the live frame rate drops, try in order:
+`openvocab_model = "yoloe-26n-seg.pt"` (−11 ms, but found less below),
+`--perception detector`, or the next step, not built yet: keep YOLO11n every
+frame and run the prompts as a slower "hazard pass" (e.g. 3–5 Hz).
+
+What each detector reported on 8 hazard photos from Wikimedia Commons (CC0 /
+CC BY / CC BY-SA, not committed) plus ultralytics' `bus.jpg` and `zidane.jpg`,
+with the default prompts, at the conf each would use in the hub. **One photo per
+hazard is an example, not an accuracy figure.**
+
+| Photo | Hazard in view | YOLO11n (conf 0.35) | YOLOE-26s (conf 0.25) |
+|---|---|---|---|
+| bollards | row of bollards along the sidewalk | cars, fire hydrant; no bollards | 1 of the bollards (0.69), cars |
+| curb | raised curb island in front | cars only | `raised curb` (0.61); plain `curb` matched nothing; also an unclear `door` (0.59) |
+| glass door | glass wall/doors right in front | people behind the glass | people behind the glass; **glass missed** |
+| low wall | mossy log/low wall on the ground, tree | nothing | `tree trunk` (0.33); **log on the ground missed** |
+| pole | utility pole | nothing | **pole missed** (also with `utility pole`, `lamp post`) |
+| sign | "sidewalk closed" sign on posts across the path | nothing (a 0.21 "bench") | `sign` (0.50, 0.32) |
+| stairs | staircase ahead | nothing | `stairs` (0.83) |
+| trash can | knocked-over bin on the sidewalk in front | the fallen bin as "bench" (0.43), cars | upright bins far away (0.41); **fallen bin missed** |
+| bus / zidane | people | 4 people + bus / 2 people + tie | 4 people / 2 people |
+
+YOLOE-26n missed the stairs and called the sign "bench". YOLO-World v2-s found
+4 of the bollards and the far bins, but missed the stairs, the curb and the
+sign. Prompt wording matters: `raised curb` found a curb that `curb` didn't.
+
+Still unsolved with any detector: **transparent glass**, **drop-offs and
+curbs** at or below the bottom of the frame (also below the depth band), thin
+poles, and things lying on the ground. A box is also not a distance: TTC still
+comes from box growth, which a static pole or wall barely produces until it's
+close.
+
 ## How the risk is computed
 
 1. **Depth** (static obstacles): Depth Anything V2 *metric* estimates meters
@@ -225,7 +380,8 @@ delete it.
 2. **Tracked objects** (things coming at you): YOLO + ByteTrack keep an ID
    per object. TTC ≈ box height / growth rate, fitted over 0.6 s. Risk is 0
    above 3 s and 1 below 1 s, applied to every strip the box covers.
-3. **Fusion**: sector risk = max(depth risk, TTC risk).
+3. **Fusion**: sector risk = max(depth risk, TTC risk), plus flow risk with
+   `--motion flow` (below).
 4. **Policy**: rising risk applies instantly, falling risk fades, values
    below the deadband are ignored, then mapped to PWM 90–255.
 5. **Safety**: no frames for 1 s, no result for 1.5 s, a result computed
@@ -235,12 +391,43 @@ delete it.
 All thresholds are in `haptic_hub/config.py`. None of them have been
 validated yet; measure against a tape measure and tune.
 
+## Optical-flow motion (`--motion flow`, experimental, off by default)
+
+`perception/flow.py` wraps the detector perception (`vision` or `detector`;
+other modes refuse the flag). Adapted from Nathan's NVIDIA webcam experiment
+(`scripts/visual_motion.py`, PR #3). For each tracked box it fits a similarity
+transform to sparse Lucas-Kanade flow between the current frame and one
+~0.15 s older:
+
+- **Approach**: the fitted scale *s* over *dt* gives TTC ≈ dt / ln(s), median
+  over 0.6 s. It goes through the same 1–3 s risk curve as box-growth TTC.
+  It is camera-relative, so walking toward a still pole counts.
+- **Crossing**: the box's horizontal motion minus the background's motion at
+  the same point, so a head turn is not a crossing. If a near box (≥ 25 % of
+  the frame height) moving ≥ 0.1 frame widths/s would sweep into the middle
+  band (35–65 % of the width) within 1 s, every sector it sweeps gets risk 0.5.
+  A vibration still means an obstacle in that direction, not "move".
+
+Flow only **raises** sector risk (max-merge). A box with too little texture, a
+new track, or no reference frame of the right age adds nothing. A failure
+raises, so the belt plays the fault pattern. Settings are in `FlowConfig`.
+
+Measured on synthetic scenes (`tests/test_flow.py`), not real footage: TTC
+within 25 % on a scripted approach; a head pan is not reported as crossing;
+LK tracking failed beyond ~25 px of shift per frame pair, which is why the
+reference frame is ~0.15 s old. Cost: median ~3 ms/frame with 1 box and
+~6 ms with 5 boxes at 384 px on an M4 Max CPU. Real-camera accuracy and
+thresholds are not validated; tune on replayed clips
+(`--source video:walk.mp4 --belt sim --show --motion flow`).
+
 ## Known limitations
 
 - Monocular depth and box-growth TTC are estimates. Not validated.
 - The camera is on the head and the belt on the torso, so direction is
   relative to where the wearer is looking.
 - Low obstacles, curbs and drop-offs are mostly outside the depth band.
+  `--detector openvocab` finds some hazards COCO lacks, but missed glass, a
+  pole and a fallen bin in our test photos (see above).
 - Webcam/video results are not glasses results; the status says which source
   is active.
 - The dashboard and control layer are tested over loopback with fake

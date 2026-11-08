@@ -6,12 +6,56 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class FlowConfig:
+    """Optical-flow motion for tracked boxes (perception/flow.py, --motion flow).
+
+    Starting points from synthetic tests and Nathan's 1 fps webcam experiment,
+    not validated values. Re-tune on replayed hub clips.
+    """
+
+    # Reference frame: the stored frame closest to target_dt_s old, within [min, max].
+    # Short enough that a walking-pace crossing moves < ~25 px at 384 px width
+    # (LK fails beyond that on synthetic tests), long enough to measure expansion.
+    target_dt_s: float = 0.15
+    min_dt_s: float = 0.08
+    max_dt_s: float = 0.4
+    # Features and Lucas-Kanade
+    max_corners: int = 120  # per region (background, each box)
+    corner_quality: float = 0.005
+    lk_window: int = 21
+    lk_levels: int = 3
+    max_fb_error_px: float = 1.0  # forward-backward check
+    # Grow each box by this fraction. 0 for YOLO's tight boxes: on synthetic tests a
+    # 0.1 margin let background points bias the scale low and fail the inlier check.
+    box_margin: float = 0.0
+    # Similarity fit (RANSAC)
+    ransac_px: float = 1.5
+    min_inliers: int = 8
+    min_background_inliers: int = 12
+    min_inlier_fraction: float = 0.7
+    min_spread_px: float = 6.0
+    min_scale: float = 0.5
+    max_scale: float = 2.0
+    # Smoothing: median over this window, needing at least min_samples measurements
+    smooth_window_s: float = 0.6
+    min_samples: int = 2
+    # Crossing: relative to the background, projected ahead lookahead_s
+    min_cross_speed: float = 0.1  # image widths per second
+    lookahead_s: float = 1.0
+    crossing_min_box_height: float = 0.25  # fraction of frame height; a proxy for "near"
+    corridor: tuple[float, float] = (0.35, 0.65)  # image band treated as the wearer's heading
+    crossing_risk: float = 0.5  # risk for a near box whose path crosses the corridor
+
+
+@dataclass
 class PerceptionConfig:
     sectors: int = 5  # must equal the belt's motor count
     device: str = "auto"  # "auto" | "mps" | "cuda" | "cpu"
     # Depth Anything V2 metric model (outputs meters). Use the Outdoor variant outside.
     depth_model: str = "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf"
     yolo_model: str = "yolo11n.pt"
+    motion: str = "off"  # "off" | "flow": optical-flow approach/crossing on tracked boxes
+    flow: FlowConfig = field(default_factory=FlowConfig)
     infer_width: int = 384  # frames are resized to this width before inference
     # Horizontal band of the image used for depth risk (fractions of height).
     # The bottom of the frame is mostly floor, which always looks close.
@@ -24,6 +68,17 @@ class PerceptionConfig:
     ttc_far_s: float = 3.0  # beyond this: no risk
     min_box_height: float = 0.08  # ignore detections smaller than this fraction of frame height
     detector_conf: float = 0.35
+    # Which detector feeds the tracker: "yolo" = yolo_model (80 COCO classes),
+    # "openvocab" = YOLOE prompted with openvocab_prompts (perception/openvocab.py).
+    detector: str = "yolo"
+    openvocab_model: str = "yoloe-26s-seg.pt"  # yoloe-26n-seg.pt: ~4 ms/frame faster alone, found less (README)
+    # Text prompts. A box's label is the prompt it matched; "person" is always added.
+    openvocab_prompts: tuple[str, ...] = (
+        "person", "car", "bicycle", "pole", "utility pole", "lamp post", "bollard", "post",
+        "door", "glass door", "stairs", "curb", "raised curb", "trash can", "sign",
+        "low wall", "bench", "chair", "table", "fire hydrant", "tree trunk",
+    )  # fmt: skip
+    openvocab_conf: float = 0.25
 
 
 @dataclass

@@ -18,10 +18,15 @@ vision = [
     "ultralytics>=8.3",
     "lap>=0.5",  # ByteTrack dependency; ultralytics would otherwise pip-install it at runtime
     "pillow>=10.0",
+    "clip",  # text encoder for the open-vocabulary detector's prompts (YOLOE); see [tool.uv.sources]
 ]
 
 [project.scripts]
 haptic-hub = "haptic_hub.cli:main"
+
+[tool.uv.sources]
+# Ultralytics' fork of OpenAI CLIP (not on PyPI). Ultralytics would otherwise pip-install it at runtime.
+clip = { git = "https://github.com/ultralytics/CLIP.git", rev = "7ffa84b3bfa40c42ecc1c77147a855e69cb2dd40" }
 
 [dependency-groups]
 dev = ["pytest>=8.0"]
