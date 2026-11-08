@@ -121,8 +121,8 @@ struct SectorSpeechGate: Sendable {
 /// Turns a stream of wearer conditions into state announcements, through one
 /// `AnnouncementGate`. "Recovered" / "Resumed" are worded against what the
 /// wearer last heard, not against a short-lived state the rate limit swallowed.
-/// The short resume cue (`.resuming`) is shown but never spoken, and it leaves
-/// what was heard and anything held untouched.
+/// Quiet states (the short resume cue, `.stopping`) are shown but never spoken,
+/// and they leave what was heard and anything held untouched.
 struct WearerAnnouncer: Sendable {
   private(set) var gate: AnnouncementGate
   private(set) var shown: WearerCondition
@@ -141,7 +141,7 @@ struct WearerAnnouncer: Sendable {
     if new != shown {
       let heard = spoken ?? shown
       shown = new
-      if new.kind == .resuming {
+      if new.kind.isQuiet {
         // Quiet: keep what was heard and anything held.
       } else if let text = WearerStatus.announcement(from: heard, to: new) {
         if let out = gate.submit(Announcement(key: new.kind.key, text: text), now: now) {

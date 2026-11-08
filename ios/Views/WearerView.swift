@@ -92,7 +92,7 @@ struct WearerView: View {
         .buttonStyle(BigButtonStyle(fill: running ? Color.red : Color.blue, contrast: contrast))
         .accessibilityLabel(running ? "Stop alerts" : "Start alerts")
         .accessibilityHint(running
-            ? "Turns belt alerts off."
+            ? "Turns belt alerts off. The belt plays three soft pulses, then stays quiet."
             : "Starts the glasses camera and belt alerts.")
         .accessibilitySortPriority(2)
     }

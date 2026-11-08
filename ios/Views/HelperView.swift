@@ -317,6 +317,7 @@ struct HelperView: View {
         case .pause: return "Pause"
         case .resume: return "Resume"
         case .beltTest: return "Belt test"
+        case .endSession: return "Stop (end session)"
         case .set(let change):
             if change.record != nil { return "Recording" }
             if change.classifier != nil { return "Labels" }
