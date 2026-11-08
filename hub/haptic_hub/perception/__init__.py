@@ -7,6 +7,7 @@ from haptic_hub.perception.base import Perception
 from haptic_hub.perception.sweep import SweepPerception
 
 KINDS = ("vision", "depth", "detector", "sweep")
+DETECTORS = ("yolo", "openvocab")
 MOTIONS = ("off", "flow")
 
 
@@ -15,6 +16,8 @@ def build_perception(kind: str, cfg: PerceptionConfig) -> Perception:
     cfg.motion == "flow" adds optical-flow approach/crossing on the tracked boxes."""
     if kind not in KINDS:
         raise ValueError(f"unknown perception {kind!r}; choose from {KINDS}")
+    if cfg.detector not in DETECTORS:
+        raise ValueError(f"unknown detector {cfg.detector!r}; choose from {DETECTORS}")
     if cfg.motion not in MOTIONS:
         raise ValueError(f"unknown motion {cfg.motion!r}; choose from {MOTIONS}")
     if cfg.motion == "flow" and kind not in ("vision", "detector"):
@@ -22,13 +25,11 @@ def build_perception(kind: str, cfg: PerceptionConfig) -> Perception:
     if kind == "sweep":
         return SweepPerception(cfg.sectors)
 
-    from haptic_hub.perception.models import DepthEstimator, ObjectTracker
+    from haptic_hub.perception.models import DepthEstimator
     from haptic_hub.perception.vision import VisionPerception
 
     depth = DepthEstimator(cfg.depth_model, cfg.device) if kind in ("vision", "depth") else None
-    tracker = (
-        ObjectTracker(cfg.yolo_model, cfg.device, cfg.detector_conf) if kind in ("vision", "detector") else None
-    )
+    tracker = build_tracker(cfg) if kind in ("vision", "detector") else None
     perception: Perception = VisionPerception(cfg, depth, tracker)
     if cfg.motion == "flow":
         from haptic_hub.perception.flow import FlowMotionPerception
@@ -37,4 +38,16 @@ def build_perception(kind: str, cfg: PerceptionConfig) -> Perception:
     return perception
 
 
-__all__ = ["KINDS", "MOTIONS", "Perception", "build_perception"]
+def build_tracker(cfg: PerceptionConfig):
+    """yolo = COCO YOLO (models.ObjectTracker), openvocab = YOLOE with text prompts.
+    Both return TrackedBox lists with ByteTrack IDs."""
+    if cfg.detector == "openvocab":
+        from haptic_hub.perception.openvocab import OpenVocabTracker
+
+        return OpenVocabTracker(cfg.openvocab_model, cfg.openvocab_prompts, cfg.device, cfg.openvocab_conf)
+    from haptic_hub.perception.models import ObjectTracker
+
+    return ObjectTracker(cfg.yolo_model, cfg.device, cfg.detector_conf)
+
+
+__all__ = ["DETECTORS", "KINDS", "MOTIONS", "Perception", "build_perception", "build_tracker"]

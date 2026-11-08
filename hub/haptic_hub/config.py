@@ -68,6 +68,17 @@ class PerceptionConfig:
     ttc_far_s: float = 3.0  # beyond this: no risk
     min_box_height: float = 0.08  # ignore detections smaller than this fraction of frame height
     detector_conf: float = 0.35
+    # Which detector feeds the tracker: "yolo" = yolo_model (80 COCO classes),
+    # "openvocab" = YOLOE prompted with openvocab_prompts (perception/openvocab.py).
+    detector: str = "yolo"
+    openvocab_model: str = "yoloe-26s-seg.pt"  # yoloe-26n-seg.pt: ~4 ms/frame faster alone, found less (README)
+    # Text prompts. A box's label is the prompt it matched; "person" is always added.
+    openvocab_prompts: tuple[str, ...] = (
+        "person", "car", "bicycle", "pole", "utility pole", "lamp post", "bollard", "post",
+        "door", "glass door", "stairs", "curb", "raised curb", "trash can", "sign",
+        "low wall", "bench", "chair", "table", "fire hydrant", "tree trunk",
+    )  # fmt: skip
+    openvocab_conf: float = 0.25
 
 
 @dataclass

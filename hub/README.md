@@ -20,6 +20,7 @@ haptic_hub/
     sweep.py           fake obstacle for bench tests
     classify.py        person vs. object label per tracked box (--classifier)
     nim.py             the same labels from a Nemotron vision model (cloud)
+    openvocab.py       detector that finds hazards by text prompt (--detector openvocab)
   haptics.py         risk -> motor levels (instant rise, slow fade, deadband)
   safety.py          when to send the fault pattern instead of levels
   belt/              where commands go
@@ -67,6 +68,7 @@ uv run haptic-hub belt-test
 ```
 
 Options: `--perception depth|detector` runs one model only (faster),
+`--detector openvocab` finds hazards by text prompt (see below),
 `--outdoor` uses the outdoor depth model, `--device mps|cuda|cpu`,
 `--motion flow` adds optical-flow approach/crossing (experimental, below).
 
@@ -100,7 +102,8 @@ draws people in magenta (`PERSON #3 (local)`) and objects in orange
   ever drive the belt, an unavailable classifier has to become a fault.
 
 Objects the detector doesn't know (walls, poles, curbs) produce no box, so they
-get no label. They are only covered by the depth risk.
+get no label. They are only covered by the depth risk. `--detector openvocab`
+(below) finds some of them.
 
 ### Cloud endpoint
 
@@ -159,6 +162,83 @@ long chain of thought before every answer. Stop the instance (`brev stop <instan
 when you're done. It bills while it runs, and storage still bills until you
 delete it.
 
+## Hazards by text prompt (`--detector openvocab`)
+
+YOLO11n only knows the 80 COCO classes: no pole, bollard, door, stairs, curb,
+trash can or wall. `--detector openvocab` swaps it for
+[YOLOE](https://docs.ultralytics.com/models/yoloe/) prompted with a list of
+words. It returns the same tracked boxes (ByteTrack IDs), so TTC, sector risk,
+the belt and the person/object labels work unchanged. A box's label is the
+prompt it matched; `person` (also `pedestrian`, `people`) maps to **person**,
+everything else to **object**. `person` is always in the list.
+
+```bash
+uv run haptic-hub run --source webcam --belt sim --show --detector openvocab
+uv run haptic-hub run --source video:walk.mp4 --belt sim --detector openvocab \
+    --prompts "person,pole,bollard,door,stairs,raised curb,trash can"
+```
+
+Defaults are in `config.py` (`openvocab_model`, `openvocab_prompts`,
+`openvocab_conf` = 0.25). The first run downloads `yoloe-26s-seg.pt` (31 MB)
+and the MobileCLIP2 text encoder `mobileclip2_b.ts` (254 MB) into the current
+directory (both gitignored). The encoder only runs at startup to turn the
+prompts into embeddings (~0.5 s once downloaded). The new `vision` dependency
+is `clip` (Ultralytics' fork of OpenAI CLIP, pinned by commit in
+`pyproject.toml`), which provides the tokenizer.
+
+**Licences.** YOLOE code and weights are AGPL-3.0, like YOLO11n.
+MobileCLIP2 is under Apple's *ML Research Model* terms: non-commercial research
+only. That may be fine for this prototype, but check it before any other use.
+Setting `openvocab_model = "yolov8s-worldv2.pt"` (YOLO-World, also supported)
+uses OpenAI CLIP (MIT) instead, a 338 MB download to `~/.cache/clip`.
+
+### Measured (2026-11-07, replayed stills, not live video)
+
+Apple M4 Max, MPS, other jobs running (load average ~6–7). Frames at
+`infer_width` 384, model input at the default 640. Median / p90 ms per frame.
+Each image was held for 20+ frames, like a camera, after warm-up.
+
+| What was timed | YOLO11n | YOLOE-26n | **YOLOE-26s** (default) | YOLO-World v2-s |
+|---|---|---|---|---|
+| detector `track()` alone | 9.2 / 11.3 | 13.7 / 17.8 | 17.7 / 22.2 | 12.4 / 15.1 |
+| `--perception detector`, whole step | 18.3 / 25.7 | 26.1 / 34.6 | 28.9 / 34.8 | – |
+| `--perception vision` (+ depth) | 40.4 / 45.7 | 45.4 / 53.7 | 56.1 / 64.7 | – |
+
+The whole-step rows include about 7 ms to shrink a ~1 MP still to 384 px (existing
+code, same for every detector). At 15 Hz the budget is 67 ms. `vision` +
+YOLOE-26s fits at the median but leaves little headroom: p90 is 65 ms and the
+max was 93 ms. If the live frame rate drops, try in order:
+`openvocab_model = "yoloe-26n-seg.pt"` (−11 ms, but found less below),
+`--perception detector`, or the next step, not built yet: keep YOLO11n every
+frame and run the prompts as a slower "hazard pass" (e.g. 3–5 Hz).
+
+What each detector reported on 8 hazard photos from Wikimedia Commons (CC0 /
+CC BY / CC BY-SA, not committed) plus ultralytics' `bus.jpg` and `zidane.jpg`,
+with the default prompts, at the conf each would use in the hub. **One photo per
+hazard is an example, not an accuracy figure.**
+
+| Photo | Hazard in view | YOLO11n (conf 0.35) | YOLOE-26s (conf 0.25) |
+|---|---|---|---|
+| bollards | row of bollards along the sidewalk | cars, fire hydrant; no bollards | 1 of the bollards (0.69), cars |
+| curb | raised curb island in front | cars only | `raised curb` (0.61); plain `curb` matched nothing; also an unclear `door` (0.59) |
+| glass door | glass wall/doors right in front | people behind the glass | people behind the glass; **glass missed** |
+| low wall | mossy log/low wall on the ground, tree | nothing | `tree trunk` (0.33); **log on the ground missed** |
+| pole | utility pole | nothing | **pole missed** (also with `utility pole`, `lamp post`) |
+| sign | "sidewalk closed" sign on posts across the path | nothing (a 0.21 "bench") | `sign` (0.50, 0.32) |
+| stairs | staircase ahead | nothing | `stairs` (0.83) |
+| trash can | knocked-over bin on the sidewalk in front | the fallen bin as "bench" (0.43), cars | upright bins far away (0.41); **fallen bin missed** |
+| bus / zidane | people | 4 people + bus / 2 people + tie | 4 people / 2 people |
+
+YOLOE-26n missed the stairs and called the sign "bench". YOLO-World v2-s found
+4 of the bollards and the far bins, but missed the stairs, the curb and the
+sign. Prompt wording matters: `raised curb` found a curb that `curb` didn't.
+
+Still unsolved with any detector: **transparent glass**, **drop-offs and
+curbs** at or below the bottom of the frame (also below the depth band), thin
+poles, and things lying on the ground. A box is also not a distance: TTC still
+comes from box growth, which a static pole or wall barely produces until it's
+close.
+
 ## How the risk is computed
 
 1. **Depth** (static obstacles): Depth Anything V2 *metric* estimates meters
@@ -214,6 +294,8 @@ thresholds are not validated; tune on replayed clips
 - The camera is on the head and the belt on the torso, so direction is
   relative to where the wearer is looking.
 - Low obstacles, curbs and drop-offs are mostly outside the depth band.
+  `--detector openvocab` finds some hazards COCO lacks, but missed glass, a
+  pole and a fallen bin in our test photos (see above).
 - Webcam/video results are not glasses results; the status says which source
   is active.
 - Person/object labels have not been checked for accuracy on our own footage,
