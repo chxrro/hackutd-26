@@ -10,12 +10,12 @@ A two-part printed box (base and lid) for the haptic belt's controller: one ESP3
 |---|---|
 | `belt_enclosure.scad` | Parametric OpenSCAD source. All dimensions are named parameters at the top. |
 | `build.sh` | Re-exports the STL/3MF files, re-renders the previews and runs the interference checks. |
-| `stl/belt_box_all_parts.stl` | **Single file to submit:** base, lid and clip laid out on one 233 × 168 mm plate, already in print orientation |
-| `stl/belt_box_base.stl` | Base (body side), in print orientation |
-| `stl/belt_box_lid.stl` | Lid (bank side), in print orientation |
-| `stl/belt_box_clip.stl` | Pants/belt clip, printed on its side |
 
-`./build.sh` also writes `stl/belt_box_plate.3mf` (the same plate with each part as a separate object) and preview images in `renders/`. Those are not committed, so run the script to get them.
+Generated files are not committed. To get the print file, run `./build.sh` to produce `stl/belt_box_all_parts.stl`. That single file is the one to submit: the base, lid and clip laid out on one 233 × 168 mm plate, already in print orientation. The script also writes:
+
+- the separate parts: `stl/belt_box_base.stl` (body side), `stl/belt_box_lid.stl` (bank side) and `stl/belt_box_clip.stl` (printed on its side);
+- `stl/belt_box_plate.3mf`, the same plate with each part as its own object;
+- preview images in `renders/`.
 
 ## Layout
 
