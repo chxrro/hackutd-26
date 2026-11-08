@@ -104,7 +104,11 @@ shows:
   test", and red "FAULT: <reason>" when the hub can't vouch for its output.
   Screen readers announce each change;
 - the frame source. Anything other than the glasses says so, e.g. "Laptop
-  webcam: NOT the glasses";
+  webcam: NOT the glasses". Phone frames count as the glasses only when the
+  app declares `frame_source: "glasses"` (`docs/protocol.md`); mock glasses
+  and the test pattern show as "SIMULATED", and an app that doesn't declare
+  a source (or an older app) shows as "UNKNOWN". The hub logs each change
+  of frame source once, and the phone's status carries `frame_source` too;
 - inference time, frame age, and the cloud classifier's model, round trip,
   last reply and error;
 - the **control code** the phone needs, and the phone's hub address.
@@ -162,9 +166,13 @@ Each session goes to the next numbered folder, `hub/recordings/session-NNN/`
 - `frames.jsonl` one line per saved frame: `seq` (the sender's), `file`,
   `received_at` (hub `time.monotonic()`, s), `t` (s since recording started),
   `capture_ms` (the sender's clock, **not** synchronized with the hub; `null`
-  if the source has none), `source`, `width`, `height`
+  if the source has none), `source`, `frame_source` (phone frames: `glasses`,
+  `mock`, `test_pattern` or `unknown`, as declared by the app; `null` for
+  other sources), `width`, `height`
 - `session.json` source, start time, limits, and on exit the frames written /
-  dropped and why recording stopped
+  dropped, why recording stopped and, for phone sessions, `frame_sources`
+  (frames written per declared source; only `glasses` frames are from the
+  real glasses)
 
 Limits: recording stops after `--record-minutes` (10) or `--record-max-frames`
 (6000) saved frames, whichever comes first. The hub keeps running.

@@ -111,12 +111,14 @@ function render(state) {
   setBanner(state.banner);
 
   const src = $("source");
-  src.dataset.kind = state.source.kind;
+  // phone frames that aren't confirmed glasses (mock, test pattern, unknown) lose the glasses styling
+  src.dataset.kind = state.source.verified === false ? "unverified" : state.source.kind;
   $("source-label").textContent = state.source.label;
   const d = state.source.details || {};
   // a file path can be very long: show its last part, keep the full name on hover
   const parts = [state.source.name.replace(/^([a-z]+:).*[\\/]/, "$1")];
   if (d.phones !== undefined) parts.push(`${d.phones} phone${d.phones === 1 ? "" : "s"}`, `stream: ${d.phone_stream || "unknown"}`);
+  if (state.source.frame_source !== undefined) parts.push(`frames: ${state.source.frame_source}`);
   if (d.frames !== undefined) parts.push(`${d.frames} frames`);
   $("source-details").textContent = parts.join(" · ");
   $("source-details").title = state.source.name;

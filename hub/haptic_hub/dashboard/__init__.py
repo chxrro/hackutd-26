@@ -63,10 +63,27 @@ SOURCE_LABELS = {
 }
 
 
-def describe_source(name: str) -> dict[str, Any]:
+# What the phone said its frames are (docs/protocol.md, phone_status.frame_source).
+# Only "glasses" keeps the plain glasses label.
+PHONE_FRAME_LABELS = {
+    "mock": "SIMULATED: mock glasses on the phone, NOT the Ray-Bans",
+    "test_pattern": "SIMULATED: phone test pattern, NOT a camera",
+}
+UNKNOWN_PHONE_LABEL = "UNKNOWN: the phone didn't say these frames are from the glasses"
+
+
+def describe_source(name: str, frame_source: str | None = None) -> dict[str, Any]:
+    """`frame_source` matters only for the glasses source; None there means unknown."""
     kind = name.partition(":")[0]
     label, live = SOURCE_LABELS.get(kind, (f"Unknown source '{kind}'", False))
-    return {"name": name, "kind": kind, "label": label, "live": live, "glasses": kind == "glasses"}
+    d: dict[str, Any] = {"name": name, "kind": kind, "label": label, "live": live, "glasses": kind == "glasses"}
+    if kind == "glasses":
+        frame_source = frame_source or "unknown"
+        d["frame_source"] = frame_source
+        if frame_source != "glasses":
+            d["label"] = PHONE_FRAME_LABELS.get(frame_source, UNKNOWN_PHONE_LABEL)
+            d["verified"] = False  # the page drops the "real glasses" styling
+    return d
 
 
 def banner(status: dict[str, Any]) -> dict[str, str]:
@@ -219,7 +236,7 @@ class Dashboard:
                 classifier = cloud.status(now)
                 if (why := cloud.stale_reason(now)) is not None:  # same fallback as classify.py
                     classifier = {**classifier, "stale": True, "error": why}
-        source = describe_source(hub.source.name)
+        source = describe_source(hub.source.name, status.get("frame_source"))
         with contextlib.suppress(Exception):
             source["details"] = hub.source.describe()
         return {
