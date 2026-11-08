@@ -25,6 +25,10 @@ glasses ─▶ meta/ ──WebSocket──▶ hub/ ──BLE──▶ esp32/ ─
 
 Quick start without any hardware: `cd hub && uv sync --extra vision && uv run haptic-hub run --source webcam --belt sim --show`
 
+## Camera diagnostic
+
+[Camera Bridge](docs/camera-bridge.md) is a standalone iPhone and Mac diagnostic for USB screen mirroring and local browser preview. The USB preview passed with a simulated test pattern. The live Ray-Ban test is pending an update to the app component on the glasses.
+
 ## Team
 - [@chxrro](https://github.com/chxrro)
 - [@NathanS11](https://github.com/NathanS11)

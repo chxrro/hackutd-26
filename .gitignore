@@ -3,6 +3,8 @@
 .vscode/
 .idea/
 *.swp
+xcuserdata/
+/ios/Signing.local.xcconfig
 
 # Env / secrets
 .env

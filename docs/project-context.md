@@ -25,6 +25,16 @@ No application code, camera integration, model, dataset, belt firmware, dependen
 
 Read the current tree before using this snapshot as a description of today's implementation. Update this section as real components land.
 
+## Standalone Camera Bridge diagnostic
+
+- **2026-11-07.** The owner selected iPhone as the phone paired with the glasses. The first experiment uses a native iPhone app, Meta's iOS Device Access Toolkit in Developer Mode, and a computer viewer on the same local network. The test pattern uses the same JPEG uploader as the Ray-Ban adapter. See [Camera Bridge setup](camera-bridge.md).
+- The viewer is designed to keep only the most recent frame, label simulated input, and clear stale frames. The phone drops frames while an upload is active and stops sending when backgrounded.
+- **2026-11-07.** The owner approved SDK use for the local prototype. Xcode 27.2 resolved the pinned Meta iOS SDK `1.0.1`. The unsigned arm64 device build passed. The app launched on an iPhone 17 simulator and sent changing JPEGs to the Mac viewer over loopback. After sending stopped, the viewer expired the last frame. The build and loopback test did not use physical glasses.
+- Earlier checks passed with synthetic inputs for the HTTP handler, viewer status transitions, and Swift uploader address and pairing validation. Camera Bridge 0.1 installed and launched on an iPhone 16 Pro over USB after the owner enabled Developer Mode and trusted the development signing profile. The physical phone's test pattern could not reach the Mac over the network in use. The viewer was listening on the Mac and responded locally. The glasses test is pending Meta AI installation and pairing. Firmware compatibility, end-to-end latency, and delivered frame rate remain unverified.
+- The team switched the bench test to an iPhone 17 with Meta AI installed and the glasses already paired, as reported by the owner. Xcode built Camera Bridge for that phone, and `devicectl` confirmed installation and launch after the phone trusted its signing profile. After the phone updated from iOS 26.6 to 27.2, Device Hub mirrored its screen over USB. Camera Bridge reported that it connected to Meta AI, and Meta AI opened its separate glasses camera permission prompt. The iPhone 17 test pattern could not reach the Mac viewer over the current Wi-Fi even after the local network prompt was dismissed. The Mac viewer responded locally with `204` and `X-Frame-State: waiting`. No frames from the iPhone 17 have been verified.
+- With no phone hotspot available, Camera Bridge added an on-screen preview for Device Hub mirroring. The signed build ran on the iPhone 17, the simulated frame counter advanced in the Mac window over USB, and stopping cleared the preview. The physical Ray-Ban Meta Gen 2 session reported `Device unavailable` before the tester put on the glasses. When worn, the SDK reported that the app component on the glasses requires an update. The camera session did not produce frames in either attempt.
+- The handoff build adds an **Open glasses app update** shortcut to Meta AI. The unsigned iOS build passed in Xcode 27.2. The shortcut still needs a physical test, followed by a live preview after the glasses app update.
+
 ## Conceptual pipeline, to validate
 
 ```text
