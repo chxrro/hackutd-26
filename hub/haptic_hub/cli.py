@@ -70,6 +70,13 @@ async def _run(args: argparse.Namespace) -> None:
         cfg.perception.depth_model = cfg.perception.depth_model.replace("Indoor", "Outdoor")
     if args.device:
         cfg.perception.device = args.device
+    cfg.perception.detector = args.detector
+    if args.prompts:
+        if args.detector != "openvocab":
+            raise SystemExit("--prompts needs --detector openvocab")
+        from haptic_hub.perception.openvocab import parse_prompts
+
+        cfg.perception.openvocab_prompts = parse_prompts(args.prompts)
 
     source = _make_source(args.source, cfg)
     if args.source == "glasses":
@@ -252,6 +259,13 @@ def main() -> None:
     run.add_argument("--device", help="torch device: mps, cuda or cpu (default: auto)")
     run.add_argument("--outdoor", action="store_true", help="use the outdoor metric depth model")
     run.add_argument("--show", action="store_true", help="open a debug window")
+    run.add_argument(
+        "--detector",
+        default="yolo",
+        choices=["yolo", "openvocab"],
+        help="yolo = YOLO11n, 80 COCO classes (default); openvocab = YOLOE found by text prompt (poles, doors, stairs, ...)",
+    )
+    run.add_argument("--prompts", help='openvocab only: comma-separated prompts, e.g. "person,pole,door,stairs" (default: config.py)')
     _add_classifier_args(run)
 
     test = sub.add_parser("belt-test", help="buzz each motor in order over BLE")
