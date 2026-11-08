@@ -88,7 +88,7 @@ class Hub:
                 await asyncio.sleep(0.2)
                 continue
             self.result = result
-            self.safety.perception_ok(time.monotonic())
+            self.safety.perception_ok(time.monotonic(), frame.received_at)
             if self.viewer is not None and not self.viewer.show(frame, result, self.command, self.reason):
                 raise UserQuit
 

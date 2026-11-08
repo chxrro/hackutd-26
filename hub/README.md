@@ -87,7 +87,8 @@ own frame rate and loop. With `--belt sim` the terminal shows the belt, e.g.
 3. **Fusion**: sector risk = max(depth risk, TTC risk).
 4. **Policy**: rising risk applies instantly, falling risk fades, values
    below the deadband are ignored, then mapped to PWM 90–255.
-5. **Safety**: no frames for 1 s, no result for 1.5 s, or a model exception
+5. **Safety**: no frames for 1 s, no result for 1.5 s, a result computed
+   from a frame received more than 1 s ago (slow model), or a model exception
    means the belt gets the **fault pattern**, never silence.
 
 All thresholds are in `haptic_hub/config.py`. None of them have been

@@ -62,6 +62,45 @@ def test_hub_drives_belt_then_faults_when_frames_stop():
     assert belt.sent > 10
 
 
+class SlowPerception(SweepPerception):
+    """Every result takes `delay` s, so each describes a frame that old."""
+
+    def __init__(self, delay):
+        super().__init__(5)
+        self.delay = delay
+
+    def process(self, frame):
+        time.sleep(self.delay)
+        return super().process(frame)
+
+
+def test_slow_perception_faults_instead_of_playing_old_results():
+    cfg = HubConfig()
+    cfg.safety.result_max_age_s = 0.3
+    belt = SimBelt(5)
+    # Each result is 0.25 s old on arrival and ~0.5 s old before the next one:
+    # never "stalled" (result_stale_s = 1.5), but too old to vouch for.
+    hub = Hub(cfg, FakeSource(seconds=60), SlowPerception(0.25), belt)
+    modes, reasons = [], set()
+
+    async def scenario():
+        task = asyncio.create_task(hub.run())
+        await asyncio.sleep(0.6)  # first result in
+        for _ in range(30):
+            await asyncio.sleep(0.05)
+            modes.append(belt.last.mode)
+            reasons.add(hub.reason)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(scenario())
+    assert BeltMode.FAULT in modes, modes
+    assert any(r and r.startswith("perception result is") for r in reasons), reasons
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
