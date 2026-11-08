@@ -6,3 +6,4 @@ recordings/
 *.ts
 .sim-build/
 sim-runs/
+bench-reports/

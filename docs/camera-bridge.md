@@ -37,7 +37,7 @@ The address is stored in UserDefaults, and the code in the Keychain for this dev
 
 ## Test without glasses (Debug builds only)
 
-**Setup → Development: MOCK (simulated)** has a **Use mock glasses** switch. It uses Meta's MockDeviceKit, so frames take the normal camera path into the hub. The wearer screen then shows a **MOCK GLASSES (simulated)** banner and never shows "Alerts on". The hub can't tell mock frames from real ones, so keep mock runs out of any measurement. **Hold frames to hub (test fault)** keeps the camera running but stops sending frames, so the hub reports a fault.
+**Setup → Development: MOCK (simulated)** has a **Use mock glasses** switch. It uses Meta's MockDeviceKit, so frames take the normal camera path into the hub. The wearer screen then shows a **MOCK GLASSES (simulated)** banner and never shows "Alerts on". The app tells the hub with `frame_source: "mock"` in `phone_status` (`docs/protocol.md`), so the hub's status, log, dashboard and recordings label those frames as simulated; the test pattern is sent as `test_pattern`. Keep mock runs out of any measurement anyway. **Hold frames to hub (test fault)** keeps the camera running but stops sending frames, so the hub reports a fault.
 
 The mock feed is `mock-feed.mp4` (HEVC) in the app's Documents folder, or the phone's back camera if there is no file. The simulator has no camera, so make a clip:
 
@@ -54,7 +54,7 @@ xcrun simctl install booted build/ios/Build/Products/Debug-iphonesimulator/Camer
 cp mock-feed.mp4 "$(xcrun simctl get_app_container booted com.hackutd26.CameraBridge data)/Documents/"
 ```
 
-Run the hub with `uv run haptic-hub run --source glasses --belt sim --perception sweep`. In the app, set the hub address to `127.0.0.1:8765`, turn on mock glasses, and press Start. The hub log switches from `belt FAULT` to `belt LEVELS`. The wearer screen reads **Warning: simulation only** (mock glasses and simulated belt).
+Run the hub with `uv run haptic-hub run --source glasses --belt sim --perception sweep`. In the app, set the hub address to `127.0.0.1:8765`, turn on mock glasses, and press Start. The hub log switches from `belt FAULT` to `belt LEVELS` and says `frame source: mock, SIMULATED, NOT the glasses`. The wearer screen reads **Warning: simulation only** (mock glasses and simulated belt).
 
 ## Checks
 

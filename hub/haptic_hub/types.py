@@ -15,6 +15,9 @@ class Frame:
     received_at: float  # hub time.monotonic() when the frame arrived
     capture_ms: int | None = None  # sender's wall clock, informational only
     source: str = "unknown"
+    # Phone frames only: what the phone said produced them ("glasses" | "mock" |
+    # "test_pattern" | "unknown"; docs/protocol.md). None for every other source.
+    frame_source: str | None = None
 
 
 @dataclass(frozen=True)

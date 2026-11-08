@@ -46,6 +46,27 @@ final class ProtocolTests: XCTestCase {
       HubOutgoing.phoneStatus(stream: "streaming"), #"{"type": "phone_status", "stream": "streaming"}"#)
   }
 
+  func testPhoneStatusWithFrameSourceMatchesDoc() throws {
+    let text = HubOutgoing.phoneStatus(stream: "streaming", frameSource: .mock)
+    XCTAssertEqual(text, #"{"frame_source":"mock","stream":"streaming","type":"phone_status"}"#)
+    try assertSameJSON(text, #"{"type": "phone_status", "stream": "streaming", "frame_source": "mock"}"#)
+  }
+
+  func testFrameSourceWireValuesMatchDoc() {
+    // docs/protocol.md section 1: glasses | mock | test_pattern
+    XCTAssertEqual(HubFrameSource.allCases.map(\.rawValue), ["glasses", "mock", "test_pattern"])
+    XCTAssertTrue(HubOutgoing.phoneStatus(stream: "starting", frameSource: .testPattern)
+      .contains(#""frame_source":"test_pattern""#))
+  }
+
+  func testFrameSourceFromTheRunsSource() {
+    XCTAssertEqual(HubFrameSource(source: .glasses, mockGlasses: false), .glasses)
+    XCTAssertEqual(HubFrameSource(source: .glasses, mockGlasses: true), .mock)
+    // The test pattern is never the glasses, mock or not.
+    XCTAssertEqual(HubFrameSource(source: .test, mockGlasses: false), .testPattern)
+    XCTAssertEqual(HubFrameSource(source: .test, mockGlasses: true), .testPattern)
+  }
+
   func testControlSetMatchesDoc() throws {
     let text = HubOutgoing.control(id: 12, .set(SettingsChange(alertRange: .far)))
     XCTAssertEqual(text, #"{"action":"set","id":12,"settings":{"alert_range":"far"},"type":"control"}"#)
@@ -72,7 +93,7 @@ final class ProtocolTests: XCTestCase {
   func testParsesBaseStatusFromDoc() throws {
     let text = """
       {"type": "status", "mode": "levels", "healthy": true, "reason": null, "levels": [0, 0, 140, 0, 0],
-       "belt": "connected", "inference_ms": 85.2, "frame_age_ms": 40.1}
+       "belt": "connected", "inference_ms": 85.2, "frame_age_ms": 40.1, "frame_source": "glasses"}
       """
     let status = try XCTUnwrap(HubStatus.parse(text))
     XCTAssertEqual(status.mode, "levels")

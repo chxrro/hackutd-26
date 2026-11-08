@@ -82,6 +82,7 @@ class Recorder:
         self._started_at: float | None = None
         self._jsonl = None
         self._meta: dict[str, Any] = {}
+        self.frame_sources: dict[str, int] = {}  # phone frames written, by declared frame_source
 
     @property
     def active(self) -> bool:
@@ -154,6 +155,9 @@ class Recorder:
             frames_written=self.written,
             frames_dropped_by_recorder=self.dropped,
             frames_seen=self.offered,
+            # Phone sessions: how many frames each declared source wrote. Only
+            # "glasses" frames are from the real glasses (docs/protocol.md).
+            **({"frame_sources": dict(sorted(self.frame_sources.items()))} if self.frame_sources else {}),
             stopped=self.stopped_reason,
             duration_s=round(time.monotonic() - (self._started_at or 0.0), 3),
         )
@@ -209,11 +213,14 @@ class Recorder:
             "t": round(t, 6),  # seconds since recording started (hub clock)
             "capture_ms": frame.capture_ms,  # sender's clock, NOT synchronized with the hub
             "source": frame.source,
+            "frame_source": frame.frame_source,  # phone frames: glasses | mock | test_pattern | unknown; else null
             "width": w,
             "height": h,
         }
         self._jsonl.write(json.dumps(line) + "\n")
         self._jsonl.flush()  # a crash still leaves a readable session
+        if frame.frame_source is not None:
+            self.frame_sources[frame.frame_source] = self.frame_sources.get(frame.frame_source, 0) + 1
         self.written = n
 
     def _write_meta(self) -> None:

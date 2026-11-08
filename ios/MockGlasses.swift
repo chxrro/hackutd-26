@@ -3,9 +3,10 @@
 //
 // Debug builds only. Meta's MockDeviceKit stands in for the Ray-Bans, so the
 // real path (GlassesCamera -> BridgeModel -> FrameForwarder -> HubClient -> hub)
-// runs without glasses. Ported from the meta/ consolidation work. The hub can't
-// tell these frames from real ones, so the app labels them everywhere as
-// "MOCK (simulated)" and never shows a calm "Alerts on" while they're in use.
+// runs without glasses. Ported from the meta/ consolidation work. The frames
+// look like real ones, so the app sends `frame_source: "mock"` in phone_status
+// (the hub labels them simulated), labels them everywhere as "MOCK (simulated)"
+// and never shows a calm "Alerts on" while they're in use.
 //
 // Feed: <app Documents>/mock-feed.mp4 (HEVC) if it exists, else the phone's
 // back camera. The simulator has no camera, so it needs the file.
