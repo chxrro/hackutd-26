@@ -52,7 +52,7 @@ def _supports_write_with_response(client: Any) -> bool | None:
     return "write" in {p.lower() for p in char.properties}
 
 
-def _has_status(client: Any) -> bool:
+def has_status(client: Any) -> bool:
     """Firmware from 2026-11-08 on has a status characteristic with notify. Only
     trusted from the discovered GATT table: older firmware (or a client that can't
     say) gets the write acknowledgement checks alone."""
@@ -233,7 +233,7 @@ class BleBelt:
                 info = decode_belt_info(await client.read_gatt_char(BELT_INFO_UUID))
             except ProtocolError as exc:
                 raise BleakError(str(exc)) from None
-            if _has_status(client):
+            if has_status(client):
                 self.status_supported = await self._subscribe_status(client)
         except BaseException:
             # The belt stops advertising while it's connected, so a client left open

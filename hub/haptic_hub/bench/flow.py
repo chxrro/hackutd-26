@@ -4,9 +4,12 @@
   motor-map        each motor alone, left to right; operator confirms position
   levels           one motor through a ramp of levels; operator confirms
   ttl              send, then stop: the belt must stop within the TTL and play
-                   the fault pattern (timed from the serial log if available)
+                   the fault pattern (timed from the serial log and/or the
+                   belt's BLE status notifications, when available)
   write-timing     N paced BLE writes; time for the write call to return
   fault-command    mode=fault heartbeats, what the hub sends when it can't vouch
+                   (with BLE status: the belt must report mode fault; the feel
+                   stays operator-confirmed)
   fault-disconnect drop BLE mid-alert: belt must stop and play the fault pattern
   reconnect        the belt advertises again and the hub can reconnect
   belt-log         (with an observer) no rejected commands, no reboots
@@ -179,6 +182,7 @@ class BenchSettings:
     ttl_hold_s: float = 1.0
     observe_s: float = 2.5  # after STOP / DISCONNECTED: long enough for two fault double-pulses
     fault_s: float = 4.5  # mode=fault heartbeats: a bit over two 2 s fault periods
+    fault_applied_ms: float = 500.0  # with BLE status: the belt must report mode fault this soon
     writes: int = 100
     send_hz: float = field(default_factory=lambda: _hub_haptics().send_hz)
     ttl_ms: int = field(default_factory=lambda: _hub_haptics().ttl_ms)  # TTL on every heartbeat
@@ -305,6 +309,14 @@ class Bench:
     def _observer_label(self) -> str:
         return self.observer.source if self.observer else "none"
 
+    def _status_log(self) -> EventLog | None:
+        """The belt's BLE status notifications as "mode" events (None: older firmware)."""
+        return getattr(self.link, "status_log", None)
+
+    def _evidence_label(self) -> str:
+        sources = [log.source for log in (self.observer, self._status_log()) if log is not None]
+        return " + ".join(sources) if sources else "none"
+
     def _log_since(self, mark: int, t0: float) -> None:
         if self.observer is None:
             return
@@ -329,7 +341,9 @@ class Bench:
             problems.append(f"belt reports {info.motor_count} motors, bench expects {self.s.motors}")
         rssi = f"rssi {info.rssi} dBm" if info.rssi is not None else "rssi n/a"
         scan = f"scan {info.scan_s:.2f} s, " if info.scan_s is not None else ""
-        summary = f"{info.name or '?'} {info.address}, {rssi}, {scan}connect {info.connect_s:.2f} s, v{info.protocol_version}, {info.motor_count} motors"
+        status = "status notify" if info.status else "no status characteristic (older firmware)"
+        summary = (f"{info.name or '?'} {info.address}, {rssi}, {scan}connect {info.connect_s:.2f} s, v{info.protocol_version}, "
+                   f"{info.motor_count} motors, build {info.build or 'unknown'}, {status}")  # fmt: skip
         if problems:
             return CheckResult("connect", FAIL, "; ".join(problems), data=data, notes=[summary])
         return CheckResult("connect", PASS, summary, data=data)
@@ -418,13 +432,17 @@ class Bench:
             eff = effective_ttl_ms(ttl)
             cmd = self._one_hot(self.s.centre, self.s.level, ttl_ms=ttl)
             measured: list[float | None] = []
+            measured_status: list[float | None] = []
 
-            async def stimulus(ttl: int = ttl, eff: int = eff, cmd: BeltCommand = cmd, measured: list = measured) -> None:
+            async def stimulus(ttl: int = ttl, eff: int = eff, cmd: BeltCommand = cmd, measured: list = measured,
+                               measured_status: list = measured_status) -> None:  # fmt: skip
                 clamp = f" (firmware clamps it to {eff} ms)" if eff != ttl else ""
                 self.op.say(f"  TTL {ttl} ms{clamp}: buzzing for {self.s.ttl_hold_s:.1f} s, then STOP. Expect it to stop ~{eff} ms after STOP, then the fault double-pulse.")
                 result = await self.hold(cmd, self.s.ttl_hold_s)
                 t_stop = result.last_write_done or time.monotonic()
                 mark = self.observer.mark() if self.observer else 0
+                status = self._status_log()
+                smark = status.mark() if status else 0
                 self.op.say("  STOP (hub silent)")
                 self._last_picture = None
                 ms = None
@@ -433,6 +451,11 @@ class Bench:
                     ms = None if ev is None else (ev.t - t_stop) * 1000
                     self._log_since(mark, t_stop)
                 measured.append(ms)
+                if status is not None:  # event times are arrival times, so waiting after the serial log is fine
+                    ev = await status.wait_for("mode", "expired", since=smark, timeout=eff / 1000 + 1.5)
+                    measured_status.append(None if ev is None else (ev.t - t_stop) * 1000)
+                    for e in status.since(smark):
+                        self.op.say(f"    status  +{(e.t - t_stop) * 1000:5.0f} ms  {e.line}")
                 remaining = t_stop + max(self.s.observe_s, eff / 1000 + 0.3) - time.monotonic()
                 if remaining > 0:
                     await asyncio.sleep(remaining)
@@ -441,37 +464,53 @@ class Bench:
                 f"  Did the motor stop about {eff / 1000:.2g} s after STOP, then the fault double-pulse start?", stimulus
             )
             ms = measured[-1]
-            auto = None
+            sms = measured_status[-1] if measured_status else None
+            timed = []
             if self.observer is not None:
-                auto = ms is not None and eff - 25 <= ms <= eff + self.s.ttl_tolerance_ms
+                timed.append(ms)
+            if self._status_log() is not None:
+                timed.append(sms)
+            auto = None
+            if timed:
+                auto = all(m is not None and eff - 25 <= m <= eff + self.s.ttl_tolerance_ms for m in timed)
             runs.append({
                 "ttl_ms": ttl, "effective_ttl_ms": eff, "answer": answer, "attempts": attempts,
                 "observed_link_lost_ms": None if ms is None else round(ms, 1),
                 "all_observed_ms": [None if m is None else round(m, 1) for m in measured],
+                "status_expired_ms": None if sms is None else round(sms, 1),
+                "all_status_expired_ms": [None if m is None else round(m, 1) for m in measured_status],
                 "auto_pass": auto,
             })
 
-        data = {"runs": runs, "tolerance_ms": self.s.ttl_tolerance_ms, "observer": self._observer_label(),
-                "measured_as": "hub's last write returning -> belt logging 'state -> link-lost'; includes BLE delivery and serial latency"}
+        observed = self.observer is not None or self._status_log() is not None
+        data = {"runs": runs, "tolerance_ms": self.s.ttl_tolerance_ms, "observer": self._evidence_label(),
+                "measured_as": "hub's last write returning -> belt logging 'state -> link-lost' (serial) and/or the belt's "
+                               "status notification 'mode -> expired' arriving (BLE); includes BLE delivery and serial latency"}  # fmt: skip
         notes = []
-        if self.observer is None:
-            notes.append("no observer: expiry not timed. Firmware has no BLE status characteristic; pass --serial PORT to time it from the serial log")
+        if not observed:
+            notes.append("no observer: expiry not timed. This firmware has no BLE status characteristic; pass --serial PORT "
+                         "to time it from the serial log")  # fmt: skip
         human_fail = any(r["answer"] == "n" for r in runs)
         auto_fail = any(r["auto_pass"] is False for r in runs)
         parts = []
         for r in runs:
-            obs = f"{r['observed_link_lost_ms']:.0f} ms" if r["observed_link_lost_ms"] is not None else ("not seen" if self.observer else "not timed")
+            if self.observer is not None or not observed:
+                v = r["observed_link_lost_ms"]
+                obs = f"{v:.0f} ms" if v is not None else ("not seen" if self.observer else "not timed")
+            else:
+                v = r["status_expired_ms"]
+                obs = f"{v:.0f} ms (status)" if v is not None else "not seen in status"
             parts.append(f"{r['ttl_ms']}->{obs}")
         summary = "TTL " + ", ".join(parts)
         if auto_fail or human_fail:
             why = []
             if auto_fail:
-                why.append(f"link-lost not logged within {self.s.ttl_tolerance_ms:.0f} ms of the TTL")
+                why.append(f"link-lost / expired not reported within {self.s.ttl_tolerance_ms:.0f} ms of the TTL")
             if human_fail:
                 why.append("operator: motor did not stop / no fault pattern")
-            return CheckResult("ttl", FAIL, summary + "; " + "; ".join(why), "operator + " + self._observer_label(), data, notes)
-        if self.observer is not None:
-            by = self._observer_label() + (" (operator assumed: --yes)" if self.op.assumed else " + operator")
+            return CheckResult("ttl", FAIL, summary + "; " + "; ".join(why), "operator + " + self._evidence_label(), data, notes)
+        if observed:
+            by = self._evidence_label() + (" (operator assumed: --yes)" if self.op.assumed else " + operator")
             return CheckResult("ttl", PASS, summary, by, data, notes)
         status, by = self._human_status("y")
         return CheckResult("ttl", status, summary, by, data, notes)
@@ -528,16 +567,39 @@ class Bench:
     async def check_fault_command(self) -> CheckResult:
         self.op.say(f"\nFAULT PATTERN (command): the hub sends mode=fault for {self.s.fault_s:.1f} s, as it does when it can't vouch for itself.")
 
+        status_log = self._status_log()
+        applied: list[float | None] = []
+
         async def stimulus() -> None:
+            smark = status_log.mark() if status_log else 0
+            t0 = time.monotonic()
             await self.hold(BeltCommand.fault(self.s.motors, self.s.ttl_ms), self.s.fault_s)
+            if status_log is not None:
+                ev = next((e for e in status_log.since(smark) if e.kind == "mode" and e.value == "fault"), None)
+                applied.append(None if ev is None else (ev.t - t0) * 1000)
+                for e in status_log.since(smark):
+                    self.op.say(f"    status  +{(e.t - t0) * 1000:5.0f} ms  {e.line}")
             await self.hold(self._off(), self.s.gap_s)
 
         answer, attempts = await self.confirm("  Did ALL motors double-pulse, about every 2 s?", stimulus)
         status, by = self._human_status(answer)
-        data = {"seconds": self.s.fault_s, "answer": answer, "attempts": attempts}
-        notes = ["the firmware logs nothing for mode=fault (state stays 'active'), so this one is operator-only"]
-        summary = "double pulse on all motors" if answer == "y" else "operator did not feel the fault pattern"
-        return CheckResult("fault-command", status, summary, by, data, notes)
+        data: dict[str, Any] = {"seconds": self.s.fault_s, "answer": answer, "attempts": attempts}
+        if status_log is None:
+            notes = ["this firmware has no BLE status characteristic, and its serial log shows a fault command only from "
+                     "2026-11-08 on ('[belt] mode -> fault'), so this one is operator-only"]  # fmt: skip
+            summary = "double pulse on all motors" if answer == "y" else "operator did not feel the fault pattern"
+            return CheckResult("fault-command", status, summary, by, data, notes)
+        ms = applied[-1] if applied else None
+        data |= {"status_fault_ms": None if ms is None else round(ms, 1), "within_ms": self.s.fault_applied_ms,
+                 "measured_as": "first fault write -> the belt's status notification 'mode -> fault' arriving"}  # fmt: skip
+        notes = ["the status shows the firmware applied the fault command; only the operator can say the pattern was felt"]
+        seen = ms is not None and ms <= self.s.fault_applied_ms
+        by = "operator + " + status_log.source if not self.op.assumed else f"{status_log.source} + operator (assumed: --yes)"
+        if not seen:
+            why = "belt status never reported mode fault" if ms is None else f"belt reported mode fault after {ms:.0f} ms"
+            return CheckResult("fault-command", FAIL, why + ("; operator did not feel it" if answer == "n" else ""), by, data, notes)
+        felt = "double pulse on all motors" if answer == "y" else "operator did not feel the fault pattern"
+        return CheckResult("fault-command", status, f"{felt}; belt reported mode fault after {ms:.0f} ms", by, data, notes)
 
     async def check_fault_disconnect(self) -> CheckResult:
         self.op.say("\nFAULT PATTERN (link lost): the centre motor buzzes, then the hub drops BLE without a goodbye (like a crash or walking out of range).")
@@ -591,6 +653,8 @@ class Bench:
             return CheckResult("reconnect", SKIPPED, "link was not dropped")
         self.op.say("\nRECONNECT: the belt should advertise again after a drop, so a restarted hub can find it.")
         t0 = time.monotonic()
+        status_log = self._status_log()
+        smark = status_log.mark() if status_log else 0
         try:
             info = await self.link.connect(self.s.scan_timeout_s)
             total = time.monotonic() - t0
@@ -598,7 +662,14 @@ class Bench:
         except BenchLinkError as exc:
             return CheckResult("reconnect", FAIL, f"could not reconnect: {exc}")
         data = {"total_s": round(total, 3), "scan_s": info.scan_s, "connect_s": info.connect_s, "rssi": info.rssi}
-        return CheckResult("reconnect", PASS, f"reconnected in {total:.2f} s", "automatic", data)
+        summary = f"reconnected in {total:.2f} s"
+        status_log = self._status_log()  # the link may only now have one
+        if status_log is not None:
+            first = next((e.value for e in status_log.since(smark) if e.kind == "mode"), None)
+            data["status_mode_on_reconnect"] = first  # expected: "disconnected" (the drop) or "dormant"
+            if first is not None:
+                summary += f"; belt status on reconnect: {first}"
+        return CheckResult("reconnect", PASS, summary, "automatic", data)
 
     def check_belt_log(self, settle_until: float | None) -> CheckResult:
         assert self.observer is not None
