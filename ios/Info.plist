@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDisplayName</key>
-    <string>Camera Bridge</string>
+    <string>Wayfeel</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>
@@ -40,6 +40,8 @@
     <string>Connects the app to your Ray-Ban Meta glasses.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Sends preview frames to your computer and connects to your glasses on the local network.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Wayfeel uses your location when you tap Where am I to find a nearby address or area.</string>
     <key>NSBonjourServices</key>
     <array>
         <string>_bonjour._tcp</string>

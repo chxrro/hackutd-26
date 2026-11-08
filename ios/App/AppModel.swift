@@ -6,6 +6,7 @@
 //   HubSession (status, control) -> WearerStatus -> screen, VoiceOver, phone haptics
 //
 
+import AVFAudio
 import SwiftUI
 import UIKit
 import os
@@ -27,6 +28,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var diagnostics = Diagnostics()
     /// Recent announcements, newest first, shown to the helper so a demo can follow along.
     @Published private(set) var recentAnnouncements: [String] = []
+    @Published private(set) var locationSummary: String?
+    @Published private(set) var locating = false
     var lastSpoken: String? { recentAnnouncements.first }
     /// The control code works for this run but couldn't be saved for the next launch.
     @Published private(set) var codeNotSaved = false
@@ -49,6 +52,7 @@ final class AppModel: ObservableObject {
     }
 
     private enum PhoneHaptic { case success, warning, tap }
+    private enum Speech { case status, warning, obstacle, interruptibleObstacle, location, hearStatus, practice }
 
     private let forwarder: FrameForwarder
     /// Every announcement is also logged (category "announce"), so a test run
@@ -57,6 +61,22 @@ final class AppModel: ObservableObject {
     private let epoch = ContinuousClock.now
     private var announcer: WearerAnnouncer
     private var speechGate = SectorSpeechGate()
+    private let obstacleSpeaker: AVSpeechSynthesizer = {
+        let speaker = AVSpeechSynthesizer()
+        speaker.usesApplicationAudioSession = false
+        return speaker
+    }()
+    private let locationLookup = LocationLookup()
+    private lazy var manualSpeaker: AVSpeechSynthesizer = {
+        let speaker = AVSpeechSynthesizer()
+        speaker.usesApplicationAudioSession = false
+        return speaker
+    }()
+    private var pendingLocationSpeech: (text: String, expires: TimeInterval)?
+    private var locationSummaryExpires: TimeInterval?
+    private var locationVoiceOverUntil: TimeInterval?
+    private var pendingStatusUntil: TimeInterval?
+    private var manualSpeechIsLocation = false
     private var ticker: Task<Void, Never>?
     private var lastRecord: Bool?
     private var resumeAfterStart = false
@@ -72,6 +92,8 @@ final class AppModel: ObservableObject {
     private var stopAttempt = 0
     /// After the first frame, keep saying "Starting" this long while the hub warms up.
     private static let warmUp: Duration = .seconds(2)
+    // Spoken estimates expire after three expected status intervals (~5 Hz).
+    private static let obstacleStatusTimeout: TimeInterval = 0.6
 
     init() {
         let defaults = UserDefaults.standard
@@ -122,6 +144,7 @@ final class AppModel: ObservableObject {
 
     func startAlerts() {
         play(.tap)
+        stopManualSpeech()
         guard pairing != nil else {
             say("setup:none", "Hub not set up. A helper can pair it in Setup.", .warning)
             return
@@ -195,6 +218,15 @@ final class AppModel: ObservableObject {
     /// Called when the app leaves the foreground. iOS would suspend the stream anyway;
     /// this is not a deliberate stop: no `end_session`, so the hub plays its fault pattern.
     func appWentToBackground() {
+        stopObstacleSpeech()
+        stopManualSpeech()
+        pendingStatusUntil = nil
+        locationLookup.cancel()
+        pendingLocationSpeech = nil
+        locationSummaryExpires = nil
+        locationVoiceOverUntil = nil
+        locationSummary = nil
+        locating = false
         if isRunning {
             bridge.fail("Stopped when the app went into the background.")
         } else if bridge.isSending {
@@ -224,6 +256,10 @@ final class AppModel: ObservableObject {
         codeNotSaved = false
         pairing = nil
         hub.disconnect()
+    }
+
+    func reconnectHub() {
+        if let pairing { hub.connect(pairing) }
     }
 
     func setClassifier(_ classifier: Classifier) {
@@ -332,18 +368,83 @@ final class AppModel: ObservableObject {
             lastRecord = record
         }
         speakObstacleKind(input)
+        if let expires = pendingStatusUntil {
+            if now >= expires {
+                pendingStatusUntil = nil
+            } else if !obstacleSpeaker.isSpeaking {
+                readBeltStatus()
+            }
+        }
+        speakPendingLocation(input)
+        if let expires = locationSummaryExpires, now >= expires {
+            locationSummary = nil
+            locationSummaryExpires = nil
+        }
         sampleDiagnostics()
     }
 
     /// Optional "Person ahead" speech, only while the hub is vouching for fresh data.
     private func speakObstacleKind(_ input: WearerInputs) {
-        guard speakObstacleKinds, let status = input.status else { return }
+        let prefix: String
         switch condition.kind {
-        case .alertsOn, .simulated: break
-        default: return
+        case .alertsOn: prefix = ""
+        case .simulated: prefix = "Simulation. "
+        default:
+            stopObstacleSpeech()
+            return
         }
-        guard let phrase = SectorSpeech.phrase(for: status), let said = speechGate.submit(phrase, now: now) else { return }
-        announce(said.text, important: false)
+        guard speakObstacleKinds, let age = input.statusAge, age <= Self.obstacleStatusTimeout,
+            let status = input.status, let phrase = SectorSpeech.phrase(for: status) else {
+            stopObstacleSpeech()
+            return
+        }
+        if UIAccessibility.isVoiceOverRunning { stopObstacleSpeech() }
+        guard (phrase.urgent || !obstacleSpeaker.isSpeaking),
+            let said = speechGate.submit(phrase, now: now) else { return }
+        if said.urgent { stopObstacleSpeech() }
+        stopManualSpeech()
+        let interruptLocation = locationVoiceOverUntil.map { now < $0 } ?? false
+        locationVoiceOverUntil = nil
+        announce(prefix + said.text, as: said.urgent || interruptLocation ? .interruptibleObstacle : .obstacle)
+    }
+
+    func findLocation() {
+        guard !locating else { return }
+        play(.tap)
+        locating = true
+        locationSummary = nil
+        locationSummaryExpires = nil
+        pendingLocationSpeech = nil
+        stopManualSpeech()
+        locationLookup.start(allowPermissionPrompt: !isRunning) { [weak self] text in
+            guard let self else { return }
+            locating = false
+            locationSummary = text
+            locationSummaryExpires = now + 30
+            pendingLocationSpeech = (text, now + 10)
+            update()
+        }
+    }
+
+    private func speakPendingLocation(_ input: WearerInputs) {
+        guard WearerStatus.permitsLocationSpeech(input, condition: condition,
+                                                statusTimeout: Self.obstacleStatusTimeout) else {
+            if manualSpeechIsLocation {
+                stopManualSpeech()
+            }
+            return
+        }
+        guard let pending = pendingLocationSpeech else { return }
+        if now >= pending.expires {
+            pendingLocationSpeech = nil
+            return
+        }
+        guard !obstacleSpeaker.isSpeaking, !manualSpeaker.isSpeaking,
+              speechGate.lastAt.map({ now - $0 >= speechGate.minInterval }) ?? true,
+              speechGate.stateAt.map({ now - $0 >= speechGate.quietAfterState }) ?? true else { return }
+        pendingLocationSpeech = nil
+        if UIAccessibility.isVoiceOverRunning { locationVoiceOverUntil = now + 10 }
+        announce(pending.text, as: .location)
     }
 
     private func sampleDiagnostics() {
@@ -366,22 +467,70 @@ final class AppModel: ObservableObject {
 
     // MARK: Speech and haptics
 
+    func readBeltStatus() {
+        pendingLocationSpeech = nil
+        stopManualSpeech()
+        if obstacleSpeaker.isSpeaking && !UIAccessibility.isVoiceOverRunning {
+            pendingStatusUntil = now + 5
+        } else {
+            pendingStatusUntil = nil
+            let current = WearerStatus.condition(inputs())
+            announce("\(current.sentence). \(current.detail)", as: .hearStatus)
+        }
+    }
+
+    func speakPractice(_ text: String) {
+        guard !bridge.isSending else { return }
+        pendingLocationSpeech = nil
+        stopManualSpeech()
+        announce(text, as: .practice)
+    }
+
     private func say(_ key: String, _ text: String, _ haptic: PhoneHaptic) {
         if let out = announcer.say(Announcement(key: key, text: text), now: now) { post(out, haptic) }
     }
 
     private func post(_ announcement: Announcement, _ haptic: PhoneHaptic) {
         speechGate.noteStateAnnouncement(now: now)
-        announce(announcement.text, important: haptic == .warning)
+        stopManualSpeech()
+        locationVoiceOverUntil = nil
+        announce(announcement.text, as: haptic == .warning ? .warning : .status)
         play(haptic)
     }
 
-    private func announce(_ text: String, important: Bool) {
-        recentAnnouncements.insert(text, at: 0)
-        if recentAnnouncements.count > 6 { recentAnnouncements.removeLast() }
-        log.notice("announce: \(text, privacy: .public)")
+    private func stopObstacleSpeech() {
+        if obstacleSpeaker.isSpeaking { obstacleSpeaker.stopSpeaking(at: .immediate) }
+    }
+
+    func stopManualSpeech() {
+        manualSpeechIsLocation = false
+        if manualSpeaker.isSpeaking { manualSpeaker.stopSpeaking(at: .immediate) }
+    }
+
+    private func announce(_ text: String, as speech: Speech = .status) {
+        if speech != .location {
+            recentAnnouncements.insert(text, at: 0)
+            if recentAnnouncements.count > 6 { recentAnnouncements.removeLast() }
+            log.notice("announce: \(text, privacy: .public)")
+        }
+        if !UIAccessibility.isVoiceOverRunning {
+            if speech == .location || speech == .hearStatus || speech == .practice {
+                manualSpeechIsLocation = speech == .location
+                manualSpeaker.speak(AVSpeechUtterance(string: text))
+                return
+            }
+            if speech == .obstacle || speech == .interruptibleObstacle {
+                obstacleSpeaker.speak(AVSpeechUtterance(string: text))
+                return
+            }
+        }
         var message = AttributedString(text)
-        message.accessibilitySpeechAnnouncementPriority = important ? .high : .default
+        switch speech {
+        case .warning: message.accessibilitySpeechAnnouncementPriority = .high
+        case .obstacle, .hearStatus: message.accessibilitySpeechAnnouncementPriority = .low
+        case .status, .interruptibleObstacle, .location, .practice:
+            message.accessibilitySpeechAnnouncementPriority = .default
+        }
         AccessibilityNotification.Announcement(message).post()
     }
 

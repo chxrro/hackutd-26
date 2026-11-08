@@ -167,6 +167,27 @@ enum WearerStatus {
   static let pausedDetail =
     "Alerts are off; the belt pulses softly every 15 seconds as a reminder. Silence does not mean the path is clear."
 
+  static func permitsLocationSpeech(_ input: WearerInputs, condition: WearerCondition,
+                                    statusTimeout: TimeInterval) -> Bool {
+    switch input.session {
+    case .off, .stopped, .diagnostic:
+      return true
+    case .starting:
+      return false
+    case .running:
+      guard let age = input.statusAge, age <= statusTimeout,
+            let status = input.status, !status.levels.isEmpty else { return false }
+      switch condition.kind {
+      case .alertsOn, .simulated:
+        return status.levels.allSatisfy { $0 == 0 }
+      case .paused:
+        return true
+      default:
+        return false
+      }
+    }
+  }
+
   static func condition(_ input: WearerInputs) -> WearerCondition {
     switch input.session {
     case .off:
@@ -236,6 +257,8 @@ enum WearerStatus {
     }
     switch status.mode {
     case "levels":
+      break
+    case "off" where status.stopped != true && !status.levels.isEmpty && status.levels.allSatisfy({ $0 == 0 }):
       break
     case "fault":
       return warning(.beltMode("fault"), "Warning: belt fault pattern", "The hub is sending the fault pattern.")

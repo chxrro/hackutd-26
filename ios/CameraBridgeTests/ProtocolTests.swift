@@ -79,6 +79,8 @@ final class ProtocolTests: XCTestCase {
     XCTAssertEqual(HubOutgoing.control(id: 1, .pause), #"{"action":"pause","id":1,"type":"control"}"#)
     XCTAssertEqual(HubOutgoing.control(id: 2, .resume), #"{"action":"resume","id":2,"type":"control"}"#)
     XCTAssertEqual(HubOutgoing.control(id: 3, .beltTest), #"{"action":"belt_test","id":3,"type":"control"}"#)
+    XCTAssertEqual(HubOutgoing.control(id: 4, .practiceCue(.fault)),
+                   #"{"action":"practice_cue","cue":"fault","id":4,"type":"control"}"#)
   }
 
   func testEndSessionMatchesDoc() throws {

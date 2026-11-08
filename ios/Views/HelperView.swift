@@ -3,9 +3,24 @@ import SwiftUI
 /// Setup and demo screen for a sighted helper: pairing, glasses setup, hub
 /// settings, recording consent, live preview and connection diagnostics.
 struct HelperView: View {
+    enum Destination {
+        case setup, hub, glasses, belt
+
+        var title: String {
+            switch self {
+            case .setup: return "Setup"
+            case .hub: return "Hub connection"
+            case .glasses: return "Glasses connection"
+            case .belt: return "Belt connection"
+            }
+        }
+    }
+
     @ObservedObject var model: AppModel
     @ObservedObject var hub: HubSession
     @ObservedObject var bridge: BridgeModel
+    @Environment(\.dynamicTypeSize) private var textSize
+    @Environment(\.accessibilityDimFlashingLights) private var dimFlashingLights
     #if DEBUG
     @ObservedObject var mock: MockGlasses
     #endif
@@ -15,9 +30,11 @@ struct HelperView: View {
     @State private var pairingError: String?
     @State private var askRecordingConsent = false
     @FocusState private var editingPairing: Bool
+    private let destination: Destination
 
-    init(model: AppModel) {
+    init(model: AppModel, destination: Destination = .setup) {
         self.model = model
+        self.destination = destination
         hub = model.hub
         bridge = model.bridge
         #if DEBUG
@@ -27,28 +44,50 @@ struct HelperView: View {
 
     var body: some View {
         Form {
-            pairingSection
-            diagnosticsSection
-            #if DEBUG
-            developmentSection
-            #endif
-            glassesSection
-            previewSection
-            settingsSection
-            recordingSection
-            wearerSection
-            Section {
-                NavigationLink("Advanced: diagnostic viewer") { AdvancedView(bridge: bridge, hubRunning: model.isRunning) }
-            } footer: {
-                Text("Sends frames to desktop/viewer.py over HTTP, or previews them on this screen. Not connected to the hub or the belt.")
+            switch destination {
+            case .setup:
+                pairingSection
+                Section("Camera") {
+                    NavigationLink("Camera preview") { CameraPreviewView(bridge: bridge) }
+                }
+                diagnosticsSection
+                #if DEBUG
+                developmentSection
+                #endif
+                glassesSection
+                previewSection
+                settingsSection
+                recordingSection
+                wearerSection
+                Section {
+                    NavigationLink("Advanced: diagnostic viewer") { AdvancedView(bridge: bridge, hubRunning: model.isRunning) }
+                } footer: {
+                    Text("Sends frames to desktop/viewer.py over HTTP, or previews them on this screen. Not connected to the hub or the belt.")
+                }
+            case .hub:
+                pairingSection
+                diagnosticsSection
+                if model.pairing != nil {
+                    Button("Reconnect to hub", action: model.reconnectHub)
+                        .disabled(hub.link == .connecting)
+                }
+            case .glasses:
+                glassesSection
+            case .belt:
+                Section {
+                    Text("Turn the belt on and keep it near the computer running the hub. The hub reconnects automatically.")
+                    row("Belt", hub.status?.belt.capitalized ?? "Status unavailable",
+                        warn: hub.status?.belt != "connected")
+                }
             }
         }
-        .navigationTitle("Setup")
+        .navigationTitle(destination.title)
         .scrollDismissesKeyboard(.immediately)
         .onAppear {
             let saved = PairingStore.load()
             address = saved.address
             code = saved.code
+            if destination == .glasses { bridge.refreshGlassesSetup() }
         }
         .alert("Record this session?", isPresented: $askRecordingConsent) {
             Button("Everyone agreed. Record.") { model.setRecording(true) }
@@ -68,10 +107,13 @@ struct HelperView: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .focused($editingPairing)
+                .accessibilityLabel("Hub address")
+                .accessibilityHint("Enter the local address shown on the hub.")
             SecureField("Control code from the hub terminal", text: $code)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .focused($editingPairing)
+                .accessibilityLabel("Hub control code, optional")
             Button("Save and connect") {
                 editingPairing = false
                 pairingError = model.savePairing(address: address, code: code)
@@ -181,7 +223,9 @@ struct HelperView: View {
     private var previewSection: some View {
         if model.isRunning {
             Section("Live preview") {
-                if let image = bridge.previewImage {
+                if dimFlashingLights {
+                    Text("Video preview hidden. Dim Flashing Lights is on.")
+                } else if let image = bridge.previewImage {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFit()
@@ -251,12 +295,12 @@ struct HelperView: View {
 
     private var wearerSection: some View {
         Section {
-            Toggle("Say “person” or “object” and its direction", isOn: $model.speakObstacleKinds)
+            Toggle("Speak obstacle alerts", isOn: $model.speakObstacleKinds)
             Toggle("Phone haptics for state changes", isOn: $model.phoneHaptics)
         } header: {
-            Text("Wearer speech")
+            Text("VoiceOver and haptics")
         } footer: {
-            Text("Speech names the strongest current belt alert, like “Person ahead”. It is limited to once every few seconds and never says where to walk or that the path is clear.")
+            Text("Hear the most urgent current obstacle, with its direction and estimated distance when available. Wayfeel uses VoiceOver or the iPhone’s speech. Silence does not mean the path is clear.")
         }
     }
 
@@ -317,6 +361,7 @@ struct HelperView: View {
         case .pause: return "Pause"
         case .resume: return "Resume"
         case .beltTest: return "Belt test"
+        case .practiceCue(let cue): return cue.label
         case .endSession: return "Stop (end session)"
         case .set(let change):
             if change.record != nil { return "Recording" }
@@ -325,33 +370,42 @@ struct HelperView: View {
         }
     }
 
+    private var setupRowLayout: AnyLayout {
+        textSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+            : AnyLayout(HStackLayout(spacing: 12))
+    }
+
     private func stepRow(_ title: String, status: (String, Bool), action: @escaping () -> Void) -> some View {
-        HStack {
-            Button(title, action: action)
-                .disabled(bridge.isSending || bridge.isSettingUp)
-            Spacer()
-            Label(status.0, systemImage: status.1 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(status.1 ? Color.green : Color.orange)
-                .font(.callout)
+        Button(action: action) {
+            setupRowLayout {
+                Text(title)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Label(status.0, systemImage: status.1 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(.primary)
+                    .font(.callout)
+            }
+            .frame(minHeight: 44)
         }
-        .accessibilityElement(children: .combine)
+        .disabled(bridge.isSending || bridge.isSettingUp)
+        .accessibilityLabel(title)
         .accessibilityValue(status.0)
     }
 
     private func row(_ title: String, _ value: String, warn: Bool) -> some View {
-        HStack(alignment: .firstTextBaseline) {
+        setupRowLayout {
             Text(title)
-            Spacer()
+                .frame(maxWidth: .infinity, alignment: .leading)
             if warn {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                    .accessibilityLabel("Warning")
+                Label(value, systemImage: "exclamationmark.triangle.fill")
+            } else {
+                Text(value)
+                    .foregroundStyle(.secondary)
             }
-            Text(value)
-                .multilineTextAlignment(.trailing)
-                .foregroundStyle(warn ? .primary : .secondary)
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(warn ? "Warning. \(value)" : value)
     }
 
     private func warningLabel(_ text: String) -> some View {
