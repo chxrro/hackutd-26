@@ -34,6 +34,8 @@
             <true/>
         </dict>
     </dict>
+    <key>NSCameraUsageDescription</key>
+    <string>Debug builds can use the phone camera as stand-in glasses for testing without the Ray-Bans.</string>
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>Connects the app to your Ray-Ban Meta glasses.</string>
     <key>NSLocalNetworkUsageDescription</key>
