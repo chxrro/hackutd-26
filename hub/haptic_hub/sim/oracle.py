@@ -106,7 +106,7 @@ class OraclePerception:
         noise = noise or OracleNoise()
         self._truth = truth
         self._depth = _OracleDepth(noise, rng) if use_depth else None
-        self._tracker = _OracleTracker(full_width, cfg.detector_conf, noise, rng) if use_tracker else None
+        self._tracker = _OracleTracker(full_width, cfg.tracker_conf, noise, rng) if use_tracker else None
         self._inner = VisionPerception(cfg, self._depth, self._tracker)  # type: ignore[arg-type]
         self.fail: str | None = None  # set to an error message to make process() raise
         self.stall_s: float = 0.0  # extra time per frame (a slow or hung model)

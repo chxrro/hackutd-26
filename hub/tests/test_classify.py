@@ -405,3 +405,29 @@ def test_flags_beat_environment(server, monkeypatch):
     lab = NimLabeler.from_config(ClassifierConfig(backend="nim", base_url=url, model="nemotron-3-nano-omni"))
     lab.close()
     assert lab.client.base_url == url and lab.model == "nemotron-3-nano-omni"
+
+
+def test_low_confidence_boxes_are_uncertain_not_risk():
+    """A box below detector_conf marks its sectors uncertain and adds no risk; a
+    confident one drives risk as before. Neither is silently dropped."""
+    from haptic_hub.config import PerceptionConfig
+    from haptic_hub.perception.models import TrackedBox
+    from haptic_hub.perception.vision import VisionPerception
+
+    class Tracker:
+        def __init__(self):
+            self.i = 0
+
+        def track(self, bgr):
+            self.i += 1
+            h = 100 + 8 * self.i  # both growing fast: TTC well under 1 s
+            return [TrackedBox(1, "person", 0.2, 0, 10, 60, 10 + h), TrackedBox(2, "person", 0.9, 300, 10, 380, 10 + h)]
+
+    vp = VisionPerception(PerceptionConfig(), None, Tracker())
+    result = None
+    for i in range(8):
+        result = vp.process(Frame(i, np.zeros((683, 384, 3), np.uint8), i / 15, source="test"))
+    assert [s.uncertain for s in result.sectors] == [True, False, False, False, False]
+    assert result.sectors[0].risk == 0.0 and result.sectors[4].risk > 0.5
+    assert [b.track_id for b in result.debug["boxes"]] == [2]
+    assert [b.track_id for b in result.debug["uncertain_boxes"]] == [1]

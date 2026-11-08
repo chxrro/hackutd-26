@@ -252,7 +252,8 @@ it, except to compare it exactly with `"not paired"`.
 
 ```json
 {"paused": false, "settings": {"classifier": "local", "alert_range": "normal", "record": false, "paused": false},
- "sectors": [{"kind": null}, {"kind": "object"}, {"kind": "person"}, {"kind": null}, {"kind": null}]}
+ "sectors": [{"kind": null, "uncertain": false}, {"kind": "object", "uncertain": false}, {"kind": "person", "uncertain": false},
+             {"kind": null, "uncertain": true}, {"kind": null, "uncertain": false}]}
 ```
 
 `sectors[i].kind` is the kind of the largest labelled detection box in that
@@ -262,6 +263,17 @@ nothing about distance or safety. All kinds are `null` while the hub's input or
 perception is faulted, so a stale result is never announced as current. `null`
 does not mean "nothing there". Pausing is explicit and announced; it is never a
 silent clear-path signal.
+
+`sectors[i].uncertain` (added 2026-11-08, additive) is `true` when the detector
+found something in that direction but scored it below the hub's confidence
+threshold (`detector_conf`, 0.35 for YOLO). The hub reports it, but **it does not
+drive the belt**: an uncertain object never vibrates a motor. It exists so a
+low-confidence detection is never silently treated as nothing. The phone may
+announce it ("something uncertain ahead-right"). It is not a distance or a
+warning level. It is always `false` while the hub is faulted or stopped by the
+wearer. `false` does not
+mean "nothing there". Clients that don't know the field ignore it, as for every
+status field.
 
 ## 3. Hub → belt: haptic command (BLE GATT write)
 

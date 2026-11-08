@@ -44,10 +44,10 @@ def build_tracker(cfg: PerceptionConfig):
     if cfg.detector == "openvocab":
         from haptic_hub.perception.openvocab import OpenVocabTracker
 
-        return OpenVocabTracker(cfg.openvocab_model, cfg.openvocab_prompts, cfg.device, cfg.openvocab_conf)
+        return OpenVocabTracker(cfg.openvocab_model, cfg.openvocab_prompts, cfg.device, cfg.tracker_conf)
     from haptic_hub.perception.models import ObjectTracker
 
-    return ObjectTracker(cfg.yolo_model, cfg.device, cfg.detector_conf)
+    return ObjectTracker(cfg.yolo_model, cfg.device, cfg.tracker_conf)
 
 
 __all__ = ["DETECTORS", "KINDS", "MOTIONS", "Perception", "build_perception", "build_tracker"]

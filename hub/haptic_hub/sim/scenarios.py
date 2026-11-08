@@ -151,9 +151,12 @@ def _scenarios() -> list[Scenario]:
     ))  # fmt: skip
     s.append(Scenario(
         "low_confidence_person", "person_approaching, but the detector only scores the person 0.2 (below "
-        "detector_conf 0.35, e.g. poor light). Depth must still alert once the person is in range.", 6.0,
+        "detector_conf 0.35, e.g. poor light). Depth must still alert once the person is in range, and the "
+        "phone's status must mark the center sector 'uncertain' the whole time (never silently nothing).", 6.0,
         _approaching_person(confidence=0.2),
-        [c.motors_off(ALL, 1.0, 4.1), c.motors_on(2, 4.6, 6.0), c.no_fault(0.8, 6.0)],
+        [c.motors_off(ALL, 1.0, 4.1), c.motors_on(2, 4.6, 6.0), c.no_fault(0.8, 6.0),
+         c.status_uncertain(2, 1.2, 6.0), c.status_uncertain((0, 4), 1.2, 6.0, expected=False),
+         c.status_uncertain((1, 3), 1.2, 3.5, expected=False)],
     ))  # fmt: skip
     s.append(Scenario(
         "head_turn", "Pole straight ahead of the torso; at 2.5 s the wearer looks 25 deg left. "
@@ -167,7 +170,7 @@ def _scenarios() -> list[Scenario]:
         "away. Box-growth TTC must alert before depth range (~2.27 m, from t~4.3 s).", 6.0,
         _approaching_person(),
         [c.motors_off(ALL, 1.0, 3.2), c.motors_on(2, 3.85, 4.3, min_frac=0.8), c.motors_on(2, 4.4, 6.0),
-         c.no_fault(0.8, 6.0)],
+         c.no_fault(0.8, 6.0), c.status_uncertain(ALL, 1.2, 6.0, expected=False)],
         danger_m=1.8,
     ))  # fmt: skip
     s.append(Scenario(
@@ -193,6 +196,93 @@ def _scenarios() -> list[Scenario]:
         [c.motors_off(ALL, 1.0, 3.2), c.motors_on(2, 4.4, 6.0, min_frac=0.85), c.no_fault(0.8, 6.0)],
         noise=OracleNoise(miss_prob=0.3),
     ))  # fmt: skip
+
+    # ------------------------------------------------------------ geometry (floor-relative depth)
+    def room(ceiling: float) -> Callable[[], World]:
+        return lambda: World([wall(-4, 6, 4, 6), wall(-4, -6, 4, -6), wall(-4, -6, -4, 6), wall(4, -6, 4, 6)],
+                             Walker(), ceiling=ceiling)  # fmt: skip
+
+    def low_box() -> Box:
+        return Box(0.45, (40, 140, 200), center=(0, 3.3), size=(1.2, 0.6), name="low box")
+
+    s.append(Scenario(
+        "indoor_ceiling", "Standing in the middle of an 8 x 12 m room with a 2.6 m ceiling; nearest wall "
+        "is 6 m ahead. The ceiling must not alert.", 4.0,
+        room(2.6), [c.motors_off(ALL, 1.0, 4.0), c.no_fault(0.8, 4.0)],
+    ))  # fmt: skip
+    s.append(Scenario(
+        "low_ceiling", "indoor_ceiling with a 2.1 m ceiling (0.5 m above the eyes): still above head "
+        "height, so still quiet.", 4.0,
+        room(2.1), [c.motors_off(ALL, 1.0, 4.0)],
+    ))  # fmt: skip
+    s.append(Scenario(
+        "looking_down", "Open ground, nothing within 10 m, head pitched 20 deg down (a normal walking "
+        "posture). The floor must not alert.", 4.0,
+        lambda: World([wall(-10, 15, 10, 15)], Walker(pitch=const(deg(20)))),
+        [c.motors_off(ALL, 1.0, 4.0)],
+    ))  # fmt: skip
+    s.append(Scenario(
+        "looking_down_pole", "Head pitched 20 deg down, a thin pole 1.2 m straight ahead: the pole still "
+        "alerts on the center motor only.", 4.0,
+        lambda: World([pole(0, 1.2, radius=0.05)], Walker(pitch=const(deg(20)))),
+        [c.motors_on(2, 1.0, 4.0), c.motors_off((0, 1, 3, 4), 1.0, 4.0)],
+    ))  # fmt: skip
+    s.append(Scenario(
+        "head_bob_walk", "Walk 1 m/s on open ground with the head pitched 15 +-8 deg (2 Hz bob) and "
+        "+-6 deg yaw sway. Nothing is within 10 m: quiet.", 5.0,
+        lambda: World([wall(-10, 30, 10, 30)],
+                      Walker(speed=const(1.0), pitch=lambda t: deg(15) + deg(8) * math.sin(2 * math.pi * 2 * t),
+                             head_yaw=lambda t: deg(6) * math.sin(2 * math.pi * 0.9 * t))),
+        [c.motors_off(ALL, 1.0, 5.0), c.no_collision()],
+    ))  # fmt: skip
+    s.append(Scenario(
+        "noisy_depth_looking_down", "looking_down (15 deg) with a depth model that reads 15% far and has "
+        "10% per-pixel noise: the fitted floor absorbs the scale error, the floor stays quiet.", 4.0,
+        lambda: World([wall(-10, 15, 10, 15)], Walker(pitch=const(deg(15)))),
+        [c.motors_off(ALL, 1.0, 4.0)],
+        noise=OracleNoise(depth_scale=1.15, depth_sigma=0.10),
+    ))  # fmt: skip
+    s.append(Scenario(
+        "low_obstacle", "Walk 0.8 m/s toward a 0.45 m tall box (bench / bin height) whose front is 3 m "
+        "ahead. It must alert on the middle motors while it is in view (about 2.2 m down to 1.1 m, when "
+        "it drops below the assumed field of view).", 3.0,
+        lambda: World([low_box()], Walker(speed=const(0.8))),
+        [c.motors_off(ALL, 0.5, 0.75), c.motors_on((1, 2, 3), 1.3, 2.2)],
+    ))  # fmt: skip
+    s.append(Scenario(
+        "low_obstacle_careful", "Closed loop: the careful walker (stops 0.4 s after a middle motor reaches "
+        "150) walks at 0.8 m/s toward the 0.45 m box. No collision.", 5.0,
+        lambda: World([low_box()], Walker(speed=const(0.8), react=_careful_walker())),
+        [c.no_collision(), c.clearance_at_end(0.3)],
+    ))  # fmt: skip
+    s.append(Scenario(
+        "ttc_on_time", "Person walks in at 1.2 m/s from 8 m. The box-growth TTC alert must be on by the "
+        "time the true TTC (center distance / speed) is 2.5 s (t~4.2 s), and quiet while it is > 4 s.", 6.0,
+        _approaching_person(speed=1.2, start_y=8.0),
+        [c.motors_off(ALL, 1.0, 2.0), c.motors_on(2, 4.2, 4.5, min_frac=0.9)],
+    ))  # fmt: skip
+    s.append(Scenario(
+        "jittery_boxes", "Standing; a person walks in at 1.5 m/s from 9 m, detector boxes jitter 4 px "
+        "(sigma per edge, full-res). Quiet while the true front-surface TTC is > 3.3 s (t < 2.5 s); the "
+        "alert still comes once the person is close.", 6.0,
+        _approaching_person(), [c.motors_off(ALL, 1.0, 2.5), c.motors_on(2, 4.4, 6.0, min_frac=0.85)],
+        noise=OracleNoise(box_jitter_px=4.0),
+    ))  # fmt: skip
+
+    for true_fov in (50.0, 70.0):
+        s.append(Scenario(
+            f"fov_{true_fov:.0f}_looking_down", f"looking_down, but the glasses' real horizontal FOV is "
+            f"{true_fov:.0f} deg while the hub assumes 60 (it is unmeasured): the floor fit must tolerate it.", 4.0,
+            lambda: World([wall(-10, 15, 10, 15)], Walker(pitch=const(deg(20)))),
+            [c.motors_off(ALL, 1.0, 4.0)], camera=CameraModel(hfov_deg=true_fov),
+            configure=lambda cfg: setattr(cfg.perception, "hfov_deg", 60.0),
+        ))  # fmt: skip
+        s.append(Scenario(
+            f"fov_{true_fov:.0f}_pole", f"pole_center, but the real horizontal FOV is {true_fov:.0f} deg "
+            "while the hub assumes 60.", 4.0,
+            _pole_ahead(0.0), [c.motors_on(2, 1.0, 4.0), c.motors_off((0, 1, 3, 4), 1.0, 4.0)],
+            camera=CameraModel(hfov_deg=true_fov), configure=lambda cfg: setattr(cfg.perception, "hfov_deg", 60.0),
+        ))  # fmt: skip
 
     # ------------------------------------------------------------ failure injection
     fault = frozenset({"fault"})
@@ -314,42 +404,19 @@ def _scenarios() -> list[Scenario]:
     # ------------------------------------------------------------ probes (limitations)
     probe = frozenset({"probe"})
     s.append(Scenario(
-        "probe_indoor_ceiling", "Standing in the middle of an 8 x 12 m room with a 2.6 m ceiling; nearest wall "
-        "is 6 m ahead. Should be quiet.", 4.0,
-        lambda: World([wall(-4, 6, 4, 6), wall(-4, -6, 4, -6), wall(-4, -6, -4, 6), wall(4, -6, 4, 6)],
-                      Walker(), ceiling=2.6),
-        [c.motors_off(ALL, 1.0, 4.0)], tags=probe,
-    ))  # fmt: skip
-    s.append(Scenario(
-        "probe_looking_down", "Open ground, nothing within 10 m, head pitched 20 deg down (a normal walking "
-        "posture). Should be quiet.", 4.0,
-        lambda: World([wall(-10, 15, 10, 15)], Walker(pitch=const(deg(20)))),
-        [c.motors_off(ALL, 1.0, 4.0)], tags=probe,
-    ))  # fmt: skip
-    s.append(Scenario(
-        "probe_low_obstacle", "Walk at 0.8 m/s toward a 0.45 m tall box (bench / bin height) 3 m ahead.", 5.5,
+        "probe_low_obstacle", "Walk at 0.8 m/s toward a 0.45 m tall box 3 m ahead, never stopping. Once "
+        "it is closer than ~1.1 m it is below the (assumed 60 deg H / 92 deg V) field of view and nothing "
+        "remembers it: a wearer who hasn't stopped by then walks into it.", 5.5,
         lambda: World([Box(0.45, (40, 140, 200), center=(0, 3.3), size=(1.2, 0.6), name="low box")],
                       Walker(speed=const(0.8))),
         [c.motors_on(2, 2.6, 3.4, min_frac=0.5), c.no_collision()], tags=probe,
     ))  # fmt: skip
     s.append(Scenario(
         "probe_low_confidence_warning", "low_confidence_person, asking for the early (TTC) warning that a "
-        "confident detection gives at 3.85-4.3 s. Low-confidence boxes are dropped, so nothing marks the "
-        "person as uncertain: is the wearer told anything before depth range?", 6.0,
+        "confident detection gives at 3.85-4.3 s. By design uncertain boxes are only reported (status "
+        "sectors[i].uncertain), they don't drive the belt: does the wearer feel anything before depth range?", 6.0,
         _approaching_person(confidence=0.2),
         [c.motors_on(2, 3.85, 4.3, min_frac=0.5)], tags=probe,
-    ))  # fmt: skip
-    s.append(Scenario(
-        "probe_ttc_lag", "Person walks in at 1.2 m/s from 8 m. Ask for an alert by the time the true TTC "
-        "(center distance / speed) is 2.5 s (t~4.2 s), i.e. that the box-growth TTC isn't late.", 6.0,
-        _approaching_person(speed=1.2, start_y=8.0),
-        [c.motors_on(2, 4.2, 4.5, min_frac=0.9)], tags=probe,
-    ))  # fmt: skip
-    s.append(Scenario(
-        "probe_jittery_boxes", "Standing; a person walks in at 1.5 m/s from 9 m, detector boxes jitter 4 px "
-        "(sigma, full-res). Should stay quiet while the person is far (> 4.5 m) and not yet near TTC 3 s.", 6.0,
-        _approaching_person(), [c.motors_off(ALL, 1.0, 3.0)], tags=probe,
-        noise=OracleNoise(box_jitter_px=4.0),
     ))  # fmt: skip
     return s
 

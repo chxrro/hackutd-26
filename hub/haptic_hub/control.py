@@ -421,12 +421,27 @@ class Control:
             "paused": self.paused,
             "stopped": self.stopped,
             "settings": self.settings(),
-            "sectors": [{"kind": k} for k in sector_kinds(result if fresh else None, motors, self.cfg.perception.min_box_height)],
+            "sectors": [
+                {"kind": k, "uncertain": u}
+                for k, u in zip(
+                    sector_kinds(result if fresh else None, motors, self.cfg.perception.min_box_height),
+                    sector_uncertain(result if fresh else None, motors),
+                    strict=True,
+                )
+            ],
         }
 
 
 def _levels(levels: tuple[int, ...], ttl_ms: int) -> BeltCommand:
     return BeltCommand(BeltMode.LEVELS if any(levels) else BeltMode.OFF, levels, ttl_ms)
+
+
+def sector_uncertain(result: PerceptionResult | None, motors: int) -> list[bool]:
+    """Per sector: a detection scored below the confident threshold overlaps it (it does
+    not drive the belt). All False while the result is stale or the hub is faulted."""
+    if result is None or len(result.sectors) != motors:
+        return [False] * motors
+    return [bool(s.uncertain) for s in result.sectors]
 
 
 def sector_kinds(result: PerceptionResult | None, motors: int, min_box_height: float = 0.0) -> list[str | None]:

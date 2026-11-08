@@ -55,7 +55,7 @@ def test_stopped_status_is_never_healthy_and_names_no_obstacles():
     assert reason == STOPPED_REASON  # even with fresh frames still in hand: never presented as clear
     fields = c.status_fields(None, OK, 5)
     assert fields["stopped"] is True and fields["paused"] is False
-    assert fields["sectors"] == [{"kind": None}] * 5
+    assert fields["sectors"] == [{"kind": None, "uncertain": False}] * 5
     assert Control(HubConfig()).status_fields(None, OK, 5)["stopped"] is False
 
 
