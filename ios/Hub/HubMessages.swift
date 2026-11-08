@@ -95,9 +95,11 @@ struct HubStatus: Decodable, Equatable, Sendable {
   let paused: Bool?
   let settings: HubSettings?
   let sectors: [Sector]?
+  /// The wearer ended the session (`end_session`); nil from hubs that predate it.
+  let stopped: Bool?
 
   enum CodingKeys: String, CodingKey {
-    case type, mode, healthy, reason, levels, belt, source, paused, settings, sectors
+    case type, mode, healthy, reason, levels, belt, source, paused, settings, sectors, stopped
     case inferenceMs = "inference_ms"
     case frameAgeMs = "frame_age_ms"
   }
@@ -105,7 +107,7 @@ struct HubStatus: Decodable, Equatable, Sendable {
   init(
     mode: String = "levels", healthy: Bool = true, reason: String? = nil, levels: [Int] = [0, 0, 0, 0, 0],
     belt: String = "connected", source: String? = nil, inferenceMs: Double? = nil, frameAgeMs: Double? = nil,
-    paused: Bool? = nil, settings: HubSettings? = nil, sectors: [Sector]? = nil
+    paused: Bool? = nil, settings: HubSettings? = nil, sectors: [Sector]? = nil, stopped: Bool? = nil
   ) {
     self.mode = mode
     self.healthy = healthy
@@ -118,6 +120,7 @@ struct HubStatus: Decodable, Equatable, Sendable {
     self.paused = paused
     self.settings = settings
     self.sectors = sectors
+    self.stopped = stopped
   }
 
   init(from decoder: Decoder) throws {
@@ -136,6 +139,7 @@ struct HubStatus: Decodable, Equatable, Sendable {
     paused = (try? c.decodeIfPresent(Bool.self, forKey: .paused)) ?? nil
     settings = (try? c.decodeIfPresent(HubSettings.self, forKey: .settings)) ?? nil
     sectors = (try? c.decodeIfPresent([Sector].self, forKey: .sectors)) ?? nil
+    stopped = (try? c.decodeIfPresent(Bool.self, forKey: .stopped)) ?? nil
   }
 
   /// Whether alerts are paused. Read from `paused` (or `settings.paused`), never
@@ -222,6 +226,10 @@ enum ControlAction: Equatable, Sendable {
   case pause
   case resume
   case beltTest
+  /// The wearer pressed Stop (docs/protocol.md, "Deliberate stop vs. lost phone"):
+  /// the hub plays the session-ended cue and stays quiet instead of faulting.
+  /// Send it only from Stop, never when the app is backgrounded or the stream fails.
+  case endSession
   case set(SettingsChange)
 
   var wireName: String {
@@ -230,6 +238,7 @@ enum ControlAction: Equatable, Sendable {
     case .pause: return "pause"
     case .resume: return "resume"
     case .beltTest: return "belt_test"
+    case .endSession: return "end_session"
     case .set: return "set"
     }
   }

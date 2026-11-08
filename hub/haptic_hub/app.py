@@ -117,10 +117,11 @@ class Hub:
             latest = self.slot.latest
             if latest is not None:  # count arrivals even while perception is busy
                 self.safety.frame_received(latest.received_at)
+                self.control.note_frame(latest.received_at)  # a frame after end_session starts a new session
             health = self.safety.check(started)
             self.health = health
             command = self.policy.command(self.result, health)
-            belt_fault = getattr(self.belt, "fault", None)  # e.g. "belt not acknowledging"
+            belt_fault = getattr(self.belt, "fault", None)  # e.g. "belt not acknowledging", "belt TTL expired"
             self.command, reason = self.control.apply(command, health, self.belt.state, started, belt_fault)
             if reason != self.reason:
                 log.info("health: %s", "ok" if reason is None else reason)
@@ -161,6 +162,8 @@ class Hub:
             "reason": self.reason,
             "levels": list(self.command.levels),
             "belt": self.belt.state,
+            "belt_confirmed": getattr(self.belt, "confirmed", None),
+            "belt_firmware": getattr(self.belt, "firmware", None),
             "source": self.source.name,
             "inference_ms": round(self.result.inference_ms, 1) if self.result else None,
             "frame_age_ms": round(age * 1000, 1) if age is not None else None,

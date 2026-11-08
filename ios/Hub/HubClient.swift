@@ -4,7 +4,10 @@
 // WebSocket connection to the hub laptop (docs/protocol.md section 1).
 // Reconnects automatically while a URL is set, and re-sends `hello` (with the
 // control code) and the last `phone_status` (with its `frame_source`) after
-// every reconnect, before any frame. Knows nothing about the glasses. Based on meta/HapticBelt/Hub/HubClient.swift.
+// every reconnect, before any frame. After `end_session` it sends no frames
+// until the next `phone_status` "starting", so a frame still in flight can't
+// reach the hub after the stop and start a new session there. Knows nothing
+// about the glasses. Based on meta/HapticBelt/Hub/HubClient.swift.
 //
 
 import Foundation
@@ -36,6 +39,8 @@ actor HubClient {
   private var generation = 0
   /// The last `phone_status` message as sent, re-sent after a reconnect.
   private var lastPhoneStatus: String?
+  /// Set by `end_session`, cleared by the next run's `phone_status` "starting".
+  private(set) var framesHeld = false
   private(set) var state: State = .disconnected {
     didSet { if state != oldValue { continuation.yield(.state(state)) } }
   }
@@ -66,7 +71,7 @@ actor HubClient {
 
   /// Sends one binary frame. Returns false if not connected or the send failed.
   func send(_ data: Data) async -> Bool {
-    guard state == .connected, let task else { return false }
+    guard state == .connected, !framesHeld, let task else { return false }
     let gen = generation
     do {
       try await task.send(.data(data))
@@ -81,6 +86,7 @@ actor HubClient {
   /// Re-sent after every reconnect.
   func reportPhoneStatus(stream: String, frameSource: HubFrameSource?) async {
     let text = HubOutgoing.phoneStatus(stream: stream, frameSource: frameSource)
+    if stream == "starting" { framesHeld = false }  // a new run: frames may flow again
     lastPhoneStatus = text
     _ = await sendText(text)
   }
@@ -88,7 +94,9 @@ actor HubClient {
   /// Sends one control request. Returns false if it couldn't be sent. The reply
   /// arrives later as an `.ack` event (or never, from a hub without control).
   func sendControl(id: Int, _ action: ControlAction) async -> Bool {
-    await sendText(HubOutgoing.control(id: id, action))
+    // Hold frames first, in the same actor step, so none is sent after end_session.
+    if action == .endSession { framesHeld = true }
+    return await sendText(HubOutgoing.control(id: id, action))
   }
 
   // MARK: Private

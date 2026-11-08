@@ -92,7 +92,7 @@ struct WearerView: View {
         .buttonStyle(BigButtonStyle(fill: running ? Color.red : Color.blue, contrast: contrast))
         .accessibilityLabel(running ? "Stop alerts" : "Start alerts")
         .accessibilityHint(running
-            ? "Turns belt alerts off."
+            ? "Turns belt alerts off. The belt plays three soft pulses, then stays quiet."
             : "Starts the glasses camera and belt alerts.")
         .accessibilitySortPriority(2)
     }
@@ -107,8 +107,8 @@ struct WearerView: View {
         .buttonStyle(BigButtonStyle(fill: Color(.darkGray), contrast: contrast))
         .accessibilityLabel(paused ? "Resume alerts" : "Pause alerts")
         .accessibilityHint(paused
-            ? "Turns belt alerts back on."
-            : "Keeps the camera running but turns belt alerts off.")
+            ? "Turns obstacle alerts back on. The belt plays the resume cue."
+            : "Keeps the camera running but turns obstacle alerts off. The belt plays the pause cue, then pulses softly as a reminder.")
         .accessibilitySortPriority(1.5)
     }
 

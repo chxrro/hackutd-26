@@ -114,9 +114,9 @@ sending `off`, so the belt stays quiet. Run one check again with `--only`, e.g.
 | `connect` | scan, connect, read info | found, protocol v1, 5 motors; prints address, RSSI, scan and connect time | automatic |
 | `motor-map` | each motor alone for 1 s, M0 → M4 | every motor felt at its expected position | operator |
 | `levels` | centre motor at 0, 30, 60 … 255 (1 s each) | stronger at each step, and the lowest felt level ≤ the hub's weakest alert level (90) | operator |
-| `ttl` | buzz, then the hub goes silent, at TTL 250 ms (the hub's) and 1000 ms (easy to feel) | the motor stops by itself and the fault double pulse starts. With `--serial`, `state -> link-lost` is logged within the TTL + 250 ms | serial log + operator |
+| `ttl` | buzz, then the hub goes silent, at TTL 250 ms (the hub's) and 1000 ms (easy to feel) | the motor stops by itself and the fault double pulse starts. With `--serial`, `state -> link-lost` is logged within the TTL + 250 ms. With firmware that has the status characteristic, its `mode -> expired` notification must also arrive within the TTL + 250 ms (no cable needed) | serial log and/or BLE status + operator |
 | `write-timing` | 100 silent writes at 15 Hz, without and with response | no failed writes, p90 ≤ 66.7 ms (one heartbeat), no `rejected command` in the log | automatic |
-| `fault-command` | `mode=fault` heartbeats for 4.5 s (what the hub sends when it can't vouch for its output) | double pulse on all motors, about every 2 s | operator |
+| `fault-command` | `mode=fault` heartbeats for 4.5 s (what the hub sends when it can't vouch for its output) | double pulse on all motors, about every 2 s. With the status characteristic, the belt must also report `mode -> fault` within 500 ms; the feel is still the operator's call | operator (+ BLE status) |
 | `fault-disconnect` | buzz, then the hub drops BLE without sending anything | motor stops, fault pattern starts. With `--serial`, the log shows `hub disconnected` and `link-lost` | serial log + operator |
 | `reconnect` | scan and connect again | the belt re-advertises and reconnects | automatic |
 | `belt-log` | (with `--serial`) the whole log | no rejected commands, no reboot mid-run | automatic |
@@ -285,9 +285,16 @@ verified and what still isn't.
 
 ## Gaps found while building the bench (proposals, not changes)
 
-None of these are implemented. Each one is a firmware or protocol change, so
-it needs the owner of `esp32/` and an update to [protocol.md](protocol.md)
-before anyone builds it.
+Update 2026-11-08: 1–4 are built on `chxrro/belt-status` with the owner's
+approval: a read + notify status characteristic, `[belt] mode -> ...` serial
+lines, the build id after the two info bytes, and `kMaxDuty` in the status. See
+[protocol.md section 3 "Status"](protocol.md). The bench uses the status for
+`ttl` and `fault-command` when the firmware has it, and `connect` records the
+build. Tested in the simulator and native tests only, not on a board. The
+original write-ups follow. 5 and 6 are unchanged.
+
+Each one was a firmware or protocol change, so it needed the owner of `esp32/`
+and an update to [protocol.md](protocol.md) before anyone built it.
 
 1. **No way to observe the belt's state over BLE.** The GATT service has a
    write-only command and a read-only info characteristic. TTL expiry, link-lost

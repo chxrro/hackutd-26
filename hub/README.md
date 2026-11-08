@@ -24,12 +24,13 @@ haptic_hub/
     openvocab.py       detector that finds hazards by text prompt (--detector openvocab)
   haptics.py         risk -> motor levels (instant rise, slow fade, deadband)
   safety.py          when to send the fault pattern instead of levels
-  cues.py            pause / resume belt cues and the paused reminder (docs/protocol.md "Belt cues")
-  control.py         runtime settings for the phone / dashboard: pause, belt test,
+  cues.py            pause / resume / session-ended belt cues and the paused reminder (docs/protocol.md "Belt cues")
+  control.py         runtime settings for the phone / dashboard: pause, end session, belt test,
                      alert range, classifier; pairing code (docs/protocol.md "Control")
   belt/              where commands go
     ble.py             the ESP32 over BLE (bleak); writes with response and reconnects
-    confirm.py         acknowledged-write tracking: "belt not acknowledging" after one TTL
+    confirm.py         acknowledged-write tracking: "belt not acknowledging" after one TTL;
+                       belt status checks ("belt TTL expired", ...; docs/protocol.md "Status")
     sim.py             simulator
   viz.py             --show debug window (render() also draws the dashboard preview)
   dashboard/         --dashboard: operator page on http://127.0.0.1:8780/ (plain HTML/JS)
@@ -104,9 +105,13 @@ map (operator confirms each motor's position), level ramp, TTL failsafe,
 fault pattern by command and by dropped link, reconnect, and BLE write timing
 (median/p90 time for the write call to return: **not** motor latency). With
 `--serial PORT` it also reads the belt's USB serial log, times TTL expiry from
-`[belt] state -> link-lost` and flags rejected commands or reboots. The
-firmware has no BLE status characteristic, so this is the only automatic way
-to see the TTL lapse. `--only motor-map` re-runs one check. `--yes` skips
+`[belt] state -> link-lost` and flags rejected commands or reboots. Firmware
+with the BLE status characteristic (docs/protocol.md "Status", 2026-11-08)
+needs no cable for that: the bench subscribes, times TTL expiry from its
+`mode -> expired` notification, checks a fault command shows up as
+`mode -> fault`, and records the build id. The feel of each pattern is still
+the operator's call. Older firmware falls back to the serial log only.
+`--only motor-map` re-runs one check. `--yes` skips
 prompts and reports the checks that need a person as UNCONFIRMED. A summary
 table is printed and a JSON report goes to `hub/bench-reports/` (git-ignored).
 Exit code 0 PASS, 1 FAIL, 3 INCOMPLETE, 130 aborted. `--belt sim` runs the whole
@@ -125,8 +130,9 @@ shows:
   labelled when it is frozen, or when the detections are not current;
 - the five motors, left to right, and the belt mode (`levels`, `off`, `fault`).
   "Simulated belt" means nothing vibrates;
-- a health banner: green "Alerts active", amber "Alerts paused", blue "Belt
-  test", and red "FAULT: <reason>" when the hub can't vouch for its output.
+- a health banner: green "Alerts active", amber "Alerts paused" or "Stopped by
+  wearer", blue "Belt test", and red "FAULT: <reason>" when the hub can't vouch
+  for its output.
   Screen readers announce each change;
 - the frame source. Anything other than the glasses says so, e.g. "Laptop
   webcam: NOT the glasses". Phone frames count as the glasses only when the
@@ -155,6 +161,7 @@ servers don't log message payloads.
 | Control | Effect |
 |---|---|
 | pause / resume | Pause: the belt plays the pause cue (outside in, 0.6 s), then one low pulse on the outer motors every 15 s (`--pause-reminder SECONDS`, `0` = off). Status: `healthy: false`, `reason: "alerts paused"`. Resume: the resume cue (inside out, 0.6 s, `reason: "resuming alerts"`), then normal alerts. A camera or perception fault still plays the fault pattern while paused and shows as the reason. See `docs/protocol.md`, "Belt cues". |
+| end session | Phone only (paired): the wearer pressed Stop. The belt plays the session-ended cue (three fading pulses on the inner motors, 1.45 s), then stays quiet. Status: `healthy: false`, `reason: "stopped by wearer"`, `stopped: true`; "no camera frames" doesn't fault while stopped. A phone that disconnects or stops sending without it still gets the fault pattern. The next frame or `phone_status` `"starting"` starts a new session with the resume cue. See `docs/protocol.md`, "Deliberate stop vs. lost phone". |
 | belt test | Each motor in turn, left to right, 0.4 s each (2 s for 5 motors, never over 3 s). Refused while paused. Status reason `"belt test"`. Real alerts are replaced by the sweep for those ≤ 3 s, so don't run it on a walk. |
 | classifier | `local` ⇄ `nim` at runtime. `nim` is only allowed if the hub started with a cloud endpoint (`--classifier nim`, `--nim-url`, `--nim-env`, or `NIM_BASE_URL` / `NIM_API_KEY` / `NVIDIA_API_KEY`). Each switch to `nim` probes the endpoint again; if that fails, nothing changes. |
 | alert range | Presets for where alerts start (below). |

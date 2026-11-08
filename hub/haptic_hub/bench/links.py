@@ -7,10 +7,16 @@ drop and re-open the link on purpose and time each write.
 `--belt sim` uses `FirmwareSimLink` when a C++ compiler is available: the real
 esp32/lib/belt_core decoder and TTL/fault state machine, compiled for the host
 by `haptic_hub.sim.firmware`, ticked every 5 ms like main.cpp's loop, reporting
-the same state-change lines the serial log prints. Without a compiler it falls
+the same state-change lines the serial log prints, and the same status reports
+the firmware notifies over BLE. Without a compiler it falls
 back to `SimBenchLink`: `SimBelt` plus a small Python copy of the TTL rules
 (docs/protocol.md "Belt failsafe behavior"). Both exercise the bench, not the
 board: a pass against either says nothing about the real belt.
+
+Firmware with the status characteristic (docs/protocol.md section 3, "Status")
+gets a `status_log`: an EventLog of its mode changes ("mode" events, e.g.
+`expired`, `fault`), which lets the bench time TTL expiry and see a fault command
+applied without the serial log. Older firmware (and SimBenchLink) has none.
 """
 
 from __future__ import annotations
@@ -24,15 +30,20 @@ from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 from bleak.exc import BleakError
 
-from haptic_hub.belt.ble import is_belt
+from haptic_hub.belt.ble import has_status, is_belt
 from haptic_hub.belt.sim import SimBelt
 from haptic_hub.protocol import (
     BELT_COMMAND_UUID,
     BELT_DEVICE_NAME,
     BELT_INFO_UUID,
     BELT_PROTOCOL_VERSION,
+    BELT_STATUS_UUID,
     BeltCommand,
     BeltMode,
+    BeltStatus,
+    ProtocolError,
+    decode_belt_info,
+    decode_belt_status,
     encode_belt_command,
 )
 
@@ -63,6 +74,8 @@ class ConnectInfo:
     protocol_version: int
     motor_count: int
     mtu: int | None = None
+    build: str | None = None  # firmware build id from the info characteristic (None: older firmware)
+    status: bool = False  # the firmware notifies its status (docs/protocol.md "Status")
 
 
 # ---------------------------------------------------------------- belt events
@@ -121,6 +134,32 @@ class EventLog:
         pass
 
 
+class StatusEvents:
+    """Turns belt status reports into "mode" events (one per mode change, plus
+    the first report after each connect) in an EventLog."""
+
+    def __init__(self, source: str) -> None:
+        self.log = EventLog(source)
+        self.last: BeltStatus | None = None
+        self.reports = 0
+        self.malformed = 0
+
+    def new_connection(self) -> None:
+        self.last = None
+
+    def on_payload(self, data: bytes | bytearray) -> None:
+        try:
+            st = decode_belt_status(bytes(data))
+        except ProtocolError:
+            self.malformed += 1
+            return
+        self.reports += 1
+        if self.last is None or st.mode != self.last.mode:
+            name = st.mode.name.lower()
+            self.log.add(ObservedEvent(time.monotonic(), "mode", name, f"[status] mode -> {name} (seq {st.seq}, max duty {st.max_duty})"))
+        self.last = st
+
+
 # ---------------------------------------------------------------- real belt
 
 
@@ -135,6 +174,9 @@ class BleBenchLink:
         self.observer: EventLog | None = None  # set by the caller (e.g. --serial)
         self._client: BleakClient | None = None
         self._seq = 0
+        self._status = StatusEvents("belt BLE status notifications")
+        self.subscribe_error: str | None = None
+        self.status_log: EventLog | None = None  # set on connect if the firmware has the status characteristic
 
     @property
     def is_connected(self) -> bool:
@@ -176,6 +218,15 @@ class BleBenchLink:
             await self._disconnect_quietly(client)
             raise BenchLinkError(f"belt info is {len(info)} bytes, expected [protocol_version, motor_count]")
         self._client = client
+        self.status_log = None
+        if has_status(client):
+            self._status.new_connection()
+            try:
+                await client.start_notify(BELT_STATUS_UUID, lambda _sender, data: self._status.on_payload(data))
+                self._status.on_payload(await client.read_gatt_char(BELT_STATUS_UUID))
+                self.status_log = self._status.log
+            except (BleakError, OSError) as exc:
+                self.subscribe_error = str(exc) or type(exc).__name__  # noted in the report; the bench goes on without it
         mtu = getattr(client, "mtu_size", None)
         return ConnectInfo(
             address=str(getattr(client, "address", device.address)),
@@ -187,6 +238,8 @@ class BleBenchLink:
             protocol_version=info[0],
             motor_count=info[1],
             mtu=mtu if isinstance(mtu, int) else None,
+            build=decode_belt_info(info).build,
+            status=self.status_log is not None,
         )
 
     async def write(self, cmd: BeltCommand, response: bool = False) -> None:
@@ -357,6 +410,8 @@ class FirmwareSimLink:
         self.motors = motors
         self.reported_motors = self.fw.motors if reported_motors is None else reported_motors
         self.observer = EventLog("esp32/lib/belt_core compiled for the host (real TTL/fault logic; no radio, motors or serial)")
+        self._status = StatusEvents("belt_core status reports (host build; no radio)")
+        self.status_log: EventLog | None = self._status.log
         self.writes = 0
         self.rejected = 0
         self.last: BeltCommand | None = None
@@ -377,11 +432,14 @@ class FirmwareSimLink:
         self.observer.add(ObservedEvent(time.monotonic(), kind, value, line))
 
     def tick(self) -> None:
-        state, _levels = self.fw.update(self._now_ms())
+        now_ms = self._now_ms()
+        state, _levels = self.fw.update(now_ms)
         name = _STATE_NAMES.get(int(state), str(int(state)))
         if name != self._state:
             self._state = name
             self._emit("state", name, f"[belt] state -> {name}")
+        if self.fw.status_due(now_ms) and self._connected:  # what main.cpp notifies
+            self._status.on_payload(self.fw.status(now_ms))
 
     async def _run(self) -> None:
         while True:
@@ -394,7 +452,9 @@ class FirmwareSimLink:
             self._loop_task = asyncio.create_task(self._run())
         self._connected = True
         self._emit("connected", None, "[ble] hub connected")
-        info = bytes([BELT_PROTOCOL_VERSION, self.reported_motors])
+        self._status.new_connection()
+        self._status.on_payload(self.fw.status(self._now_ms()))  # the status read on connect
+        info = bytes([BELT_PROTOCOL_VERSION, self.reported_motors]) + b"sim"
         return ConnectInfo(
             address="sim",
             name=f"{BELT_DEVICE_NAME} (simulated, belt_core)",
@@ -404,6 +464,8 @@ class FirmwareSimLink:
             info_hex=info.hex(" "),
             protocol_version=info[0],
             motor_count=info[1],
+            build="sim",
+            status=True,
         )
 
     async def write(self, cmd: BeltCommand, response: bool = False) -> None:

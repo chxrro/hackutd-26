@@ -31,12 +31,18 @@ from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
 
-from haptic_hub.belt.confirm import NOT_ACKNOWLEDGING_REASON
+from haptic_hub.belt.confirm import (
+    BELT_STATUS_REASONS,
+    FAULT_PATTERN_REASON,
+    NOT_ACKNOWLEDGING_REASON,
+    STATUS_STALE_REASON,
+)
 from haptic_hub.control import (
     ALERT_RANGES,
     BELT_TEST_REASON,
     PAUSED_REASON,
     RESUME_REASON,
+    STOPPED_REASON,
     Control,
     belt_link_reason,
     ws_logger,
@@ -96,7 +102,7 @@ def describe_source(name: str, frame_source: str | None = None) -> dict[str, Any
 
 
 def banner(status: dict[str, Any]) -> dict[str, str]:
-    """The one-line verdict at the top of the page: level ok | paused | test | fault."""
+    """The one-line verdict at the top of the page: level ok | paused | stopped | test | fault."""
     reason, paused, belt = status.get("reason"), status.get("paused", False), status.get("belt", "")
     if reason == BELT_TEST_REASON:
         return {"level": "test", "title": "Belt test running", "detail": "Motors sweep left to right. These vibrations are not obstacles."}
@@ -107,12 +113,27 @@ def banner(status: dict[str, Any]) -> dict[str, str]:
             "detail": "The belt played the pause cue and gives a short reminder pulse while paused. "
             "Silence does not mean the path is clear.",
         }
+    if reason == STOPPED_REASON:
+        return {
+            "level": "stopped",
+            "title": "Stopped by wearer",
+            "detail": "The wearer pressed Stop. The belt played the session-ended cue and is quiet: no obstacle "
+            "alerts until the phone starts again. Silence does not mean the path is clear.",
+        }
     if reason == RESUME_REASON:
         return {"level": "test", "title": "Resuming alerts", "detail": "The belt plays the resume cue. These vibrations are not obstacles."}
     if reason is not None:
         if reason == NOT_ACKNOWLEDGING_REASON:
             detail = ("The belt is not confirming the hub's commands. It may be playing the fault pattern, "
                       "or nothing. Do not rely on it." + (" Alerts are paused too." if paused else ""))
+        elif reason in BELT_STATUS_REASONS:
+            if reason == STATUS_STALE_REASON:
+                what = "The belt has stopped reporting its status, so the hub can't tell what it is doing."
+            elif reason == FAULT_PATTERN_REASON:
+                what = "The belt reports it is playing the fault pattern, although the hub didn't ask for it."
+            else:
+                what = "The belt reports it is not following the hub's commands. It plays the fault pattern, or nothing."
+            detail = what + " Do not rely on it." + (" Alerts are paused too." if paused else "")
         elif belt_link_reason(belt) == reason:
             detail = "Commands are not reaching the belt." + (" Alerts are paused too." if paused else "")
         elif paused:
@@ -268,7 +289,12 @@ class Dashboard:
             "status": status,
             "banner": banner(status),
             "source": source,
-            "belt": {"state": hub.belt.state, "simulated": hub.belt.state == "simulated"},
+            "belt": {
+                "state": hub.belt.state,
+                "simulated": hub.belt.state == "simulated",
+                "confirmed": status.get("belt_confirmed"),
+                "firmware": status.get("belt_firmware"),
+            },
             "perception": hub.perception.name,
             "classifier": classifier,
             "options": {

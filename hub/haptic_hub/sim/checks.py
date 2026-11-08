@@ -13,6 +13,12 @@ from typing import Any
 
 import numpy as np
 
+from haptic_hub.control import (
+    BELT_TEST_REASON,
+    PAUSED_REASON,
+    RESUME_REASON,
+    STOPPED_REASON,
+)
 from haptic_hub.sim.firmware import BeltSample
 from haptic_hub.sim.world import Pose
 
@@ -225,6 +231,50 @@ def status_uncertain(sectors: int | Sequence[int], t0: float, t1: float, expecte
     return check
 
 
+def pulses(sectors: int | Sequence[int], t0: float, t1: float, count: int) -> Check:
+    """Exactly `count` separate pulses during [t0, t1] where the listed motors, and
+    only those, vibrate (not the fault pattern): a cue, as the wearer feels it."""
+    ss = set(_sectors(sectors))
+
+    def check(tl: Timeline) -> CheckResult:
+        edges, on, others = 0, False, 0
+        for s in tl.belt_between(t0, t1):
+            lit = {i for i, lv in enumerate(s.levels) if lv > 0}
+            now = not s.signalling_fault and lit == ss
+            edges += now and not on
+            on = now
+            others += not now and (s.signalling_fault or bool(lit))  # anything else felt
+        name = f"{count} pulses on motor {_names(tuple(sorted(ss)))} {t0:g}-{t1:g}s"
+        return CheckResult(name, edges == count and others == 0, f"{edges} pulses, {others} other samples")
+
+    return check
+
+
+def status_reason(t0: float, t1: float, reason: str, min_frac: float = 1.0) -> Check:
+    """The phone was told `healthy: false` with exactly this reason during [t0, t1]."""
+
+    def check(tl: Timeline) -> CheckResult:
+        msgs = [m for t, m in tl.statuses if t0 <= t <= t1 and m.get("type") == "status"]
+        f = _frac(msgs, lambda m: m.get("healthy") is False and m.get("reason") == reason)
+        seen = sorted({str(m.get("reason")) for m in msgs})[:3]
+        return CheckResult(f"status {reason!r} {t0:g}-{t1:g}s", f >= min_frac, f"{f:.0%} of {len(msgs)} msgs; {seen}")
+
+    return check
+
+
+def hub_reason(t0: float, t1: float, prefix: str, min_frac: float = 1.0) -> Check:
+    """The hub's own status reason (sampled in-process, so it holds even with no
+    phone connected to hear it) starts with `prefix` during [t0, t1]."""
+
+    def check(tl: Timeline) -> CheckResult:
+        hs = [h for h in tl.hub if t0 <= h.t <= t1]
+        f = _frac(hs, lambda h: h.reason is not None and h.reason.startswith(prefix))
+        seen = sorted({str(h.reason) for h in hs})[:3]
+        return CheckResult(f"hub reason {prefix!r}... {t0:g}-{t1:g}s", f >= min_frac, f"{f:.0%}; {seen}")
+
+    return check
+
+
 def no_collision() -> Check:
     def check(tl: Timeline) -> CheckResult:
         return CheckResult("no collision", not tl.collisions, f"{tl.collisions}" if tl.collisions else "clear")
@@ -301,17 +351,24 @@ def alert_metrics(tl: Timeline, danger_m: float, quiet_m: float, latency_s: floa
 # ------------------------------------------------------------------ invariants (every scenario)
 
 
+# Unhealthy, but on purpose and announced on the belt with a cue (docs/protocol.md
+# "Belt cues"), so silence or cue vibrations are expected there, not the fault pattern.
+DELIBERATE_REASONS = frozenset({STOPPED_REASON, PAUSED_REASON, RESUME_REASON, BELT_TEST_REASON})
+
+
 def never_silent_when_unhealthy(settle_s: float = 0.15, start_s: float = 0.5) -> Check:
     """Whenever the hub says it can't vouch for its output, the belt must be playing
-    the fault pattern within settle_s, never silence or a stale alert."""
+    the fault pattern within settle_s, never silence or a stale alert. The
+    deliberate, cued states (stopped by wearer, paused, resuming, belt test) are
+    exempt; a fault outranks all of them in `reason`, so it is still judged."""
 
     def check(tl: Timeline) -> CheckResult:
         bad = []
         for h in tl.hub:
-            if h.t < start_s or h.reason is None:
+            if h.t < start_s or h.reason is None or h.reason in DELIBERATE_REASONS:
                 continue
             # only judge samples where the hub has been unhealthy for at least settle_s
-            if any(o.reason is None for o in tl.hub if h.t - settle_s <= o.t <= h.t):
+            if any(o.reason is None or o.reason in DELIBERATE_REASONS for o in tl.hub if h.t - settle_s <= o.t <= h.t):
                 continue
             # The hub sets its reason and sends the matching command in one event-loop
             # step, so judge the belt samples on both sides of the moment `reason` was

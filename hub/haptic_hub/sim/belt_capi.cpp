@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "belt_protocol.h"
+#include "belt_status.h"
 #include "haptic_controller.h"
 
 namespace {
@@ -12,6 +13,7 @@ struct SimBelt {
   explicit SimBelt(uint8_t motors) : controller(motors) {}
   belt::HapticController controller;
   belt::Mode lastMode = belt::Mode::Off;
+  belt::StatusNotifier notifier;
 };
 }  // namespace
 
@@ -47,6 +49,19 @@ int belt_update(void* handle, uint32_t now_ms, uint8_t* out_levels) {
 
 // Mode of the last accepted command (0 off, 1 levels, 2 fault).
 int belt_last_mode(void* handle) { return static_cast<int>(static_cast<SimBelt*>(handle)->lastMode); }
+
+// Same as the status part of main.cpp loop(), after belt_update(): returns 1 if a
+// status notification is due now (mode change or period), else 0.
+int belt_status_due(void* handle, uint32_t now_ms) {
+  auto* b = static_cast<SimBelt*>(handle);
+  return b->notifier.shouldNotify(belt::statusMode(b->controller), now_ms) ? 1 : 0;
+}
+
+// Encodes the current status payload into out; returns its length (0 if cap is too small).
+size_t belt_status(void* handle, uint32_t now_ms, uint32_t build_id, uint8_t max_duty, uint8_t* out, size_t cap) {
+  auto* b = static_cast<SimBelt*>(handle);
+  return belt::encodeStatus(belt::makeStatus(b->controller, now_ms, build_id, max_duty), out, cap);
+}
 
 uint8_t belt_motor_count(void* handle) { return static_cast<SimBelt*>(handle)->controller.motorCount(); }
 }

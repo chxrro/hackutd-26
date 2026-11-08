@@ -19,13 +19,13 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
 
-from haptic_hub.protocol import BeltCommand
+from haptic_hub.protocol import BELT_INFO_UUID, BELT_STATUS_UUID, BeltCommand
 
 _HERE = Path(__file__).resolve().parent
 _SHIM = _HERE / "belt_capi.cpp"
 _CORE = _HERE.parents[2] / "esp32" / "lib" / "belt_core" / "src"
-_SOURCES = ("belt_protocol.cpp", "haptic_controller.cpp")
-_HEADERS = ("belt_protocol.h", "haptic_controller.h")
+_SOURCES = ("belt_protocol.cpp", "haptic_controller.cpp", "belt_status.cpp")
+_HEADERS = ("belt_protocol.h", "haptic_controller.h", "belt_status.h")
 _BUILD_DIR = _HERE.parents[1] / ".sim-build"
 
 FIRMWARE_LOOP_MS = 5  # esp32/src/main.cpp loop() delay
@@ -90,6 +90,12 @@ def _lib() -> ctypes.CDLL:
         lib.belt_update.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint8)]
         lib.belt_last_mode.restype = ctypes.c_int
         lib.belt_last_mode.argtypes = [ctypes.c_void_p]
+        lib.belt_status_due.restype = ctypes.c_int
+        lib.belt_status_due.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        lib.belt_status.restype = ctypes.c_size_t
+        lib.belt_status.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint8, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+        ]  # fmt: skip
         lib.belt_motor_count.restype = ctypes.c_uint8
         lib.belt_motor_count.argtypes = [ctypes.c_void_p]
         _LIB = lib
@@ -124,6 +130,15 @@ class BeltFirmware:
     def last_mode(self) -> int:
         return int(self._lib.belt_last_mode(self._handle))
 
+    def status_due(self, now_ms: int) -> bool:
+        """Call after update(): the firmware's notify trigger (mode change or period)."""
+        return bool(self._lib.belt_status_due(self._handle, now_ms & 0xFFFFFFFF))
+
+    def status(self, now_ms: int, build_id: int = 0, max_duty: int = 255) -> bytes:
+        buf = (ctypes.c_uint8 * 32)()
+        n = self._lib.belt_status(self._handle, now_ms & 0xFFFFFFFF, build_id, max_duty, buf, len(buf))
+        return bytes(buf[:n])
+
 
 @dataclass
 class BeltSample:
@@ -138,6 +153,9 @@ class LinkFaults:
     """Radio problems the sim can inject between hub and belt."""
 
     drop_writes: bool = False  # writes are lost (never acknowledged) but the link stays up
+    # Writes are acknowledged by the BLE stack but never reach the firmware's main
+    # loop (its event queue is full, or the loop is stalled). Only the status shows it.
+    drop_applied: bool = False
     disconnected: bool = False  # BLE link dropped (firmware gets onLinkLost); reconnects fail meanwhile
 
 
@@ -146,21 +164,56 @@ class LinkFaults:
 # known address takes a moment. The real hub retries after 1 s (doubling); the
 # sim retries sooner so scenarios stay short.
 ACK_RTT_S = 0.02
+NOTIFY_LATENCY_S = 0.01  # firmware notify -> hub callback
 CONNECT_S = 0.05
 SIM_RECONNECT_DELAY_S = 0.2
 SIM_MAX_RECONNECT_DELAY_S = 0.4
 
 
+class _Char:
+    def __init__(self, *properties: str) -> None:
+        self.properties = list(properties)
+
+
+class _Services:
+    """The GATT table the hub discovers (BleBelt's capability checks read it)."""
+
+    def __init__(self, status: bool) -> None:
+        from haptic_hub.protocol import BELT_COMMAND_UUID
+
+        self._chars = {BELT_COMMAND_UUID: _Char("write", "write-without-response"), BELT_INFO_UUID: _Char("read")}
+        if status:
+            self._chars[BELT_STATUS_UUID] = _Char("read", "notify")
+
+    def get_characteristic(self, uuid: str) -> _Char | None:
+        return self._chars.get(uuid)
+
+
 class SimRadioClient:
     """Stands in for bleak.BleakClient between the hub's real BleBelt and the
     emulated firmware: writes are decoded by belt_core, acknowledged after
-    ACK_RTT_S, or silently lost (never acknowledged) while drop_writes is on."""
+    ACK_RTT_S, or silently lost (never acknowledged) while drop_writes is on.
+    Status notifications come from belt_core's own encoder and notify trigger."""
 
     def __init__(self, belt: EmulatedBelt, target: str, disconnected_callback=None) -> None:  # noqa: ANN001
         self.belt = belt
         self.address = str(target)
         self.is_connected = False
         self._on_disconnect = disconnected_callback
+        self.services = _Services(belt.status_characteristic)
+        self.notify_callback = None
+
+    async def start_notify(self, uuid: str, callback) -> None:  # noqa: ANN001
+        if uuid != BELT_STATUS_UUID or not self.belt.status_characteristic:
+            raise OSError(f"sim: no notify characteristic {uuid}")
+        self.notify_callback = callback
+
+    def notify(self, payload: bytes) -> None:
+        if self.is_connected and self.notify_callback is not None:
+            cb = self.notify_callback
+            asyncio.get_running_loop().call_later(
+                NOTIFY_LATENCY_S, lambda: self.is_connected and cb(None, bytearray(payload))
+            )
 
     async def connect(self) -> None:
         await asyncio.sleep(CONNECT_S)
@@ -170,7 +223,10 @@ class SimRadioClient:
         self.belt._radio = self
 
     async def read_gatt_char(self, uuid: str) -> bytes:
-        return bytes([1, self.belt.motors])  # [protocol_version, motor_count]
+        if uuid == BELT_STATUS_UUID and self.belt.status_characteristic:
+            return self.belt.fw.status(self.belt._now_ms(), self.belt.build_id, self.belt.max_duty)
+        info = bytes([1, self.belt.motors])  # [protocol_version, motor_count]
+        return info + self.belt.build.encode() if self.belt.status_characteristic else info
 
     async def write_gatt_char(self, uuid: str, data: bytes, response: bool = False) -> None:
         belt = self.belt
@@ -182,7 +238,9 @@ class SimRadioClient:
             if response:
                 await asyncio.Event().wait()  # no Write Response ever comes
             return
-        if belt.fw.on_payload(bytes(data), belt._now_ms()) != 0:
+        if belt.faults.drop_applied:
+            belt.unapplied_writes += 1  # acknowledged below, never applied
+        elif belt.fw.on_payload(bytes(data), belt._now_ms()) != 0:
             belt.rejected += 1
         if response:
             await asyncio.sleep(ACK_RTT_S)
@@ -212,7 +270,15 @@ class EmulatedBelt:
     samples: list[BeltSample] = field(default_factory=list)
     writes: int = 0  # radio writes attempted by the hub's BleBelt
     lost_writes: int = 0
+    unapplied_writes: int = 0
     rejected: int = 0
+    status_characteristic: bool = True  # False: emulate firmware older than 2026-11-08
+    # The host build of belt_core has no firmware commit: build_id 0 (unknown) in the
+    # status, "sim" in the info characteristic.
+    build_id: int = 0
+    build: str = "sim"
+    max_duty: int = 255
+    status_notifications: int = 0
 
     def __post_init__(self) -> None:
         from haptic_hub.belt.ble import BleBelt
@@ -234,6 +300,14 @@ class EmulatedBelt:
     @property
     def fault(self) -> str | None:
         return self.ble.fault
+
+    @property
+    def confirmed(self) -> str | None:
+        return self.ble.confirmed
+
+    @property
+    def firmware(self) -> dict | None:
+        return self.ble.firmware
 
     @property
     def reconnects(self) -> int:
@@ -260,6 +334,9 @@ class EmulatedBelt:
                 self._radio.drop_link()
         self._was_disconnected = self.faults.disconnected
         state, levels = self.fw.update(now_ms)
+        if self.fw.status_due(now_ms) and self.status_characteristic and self._radio is not None:
+            self.status_notifications += 1
+            self._radio.notify(self.fw.status(now_ms, self.build_id, self.max_duty))
         fault = state == FirmwareState.LINK_LOST or (state == FirmwareState.ACTIVE and self.fw.last_mode == 2)
         sample = BeltSample(now_ms / 1000, state, levels, fault)
         self.samples.append(sample)
