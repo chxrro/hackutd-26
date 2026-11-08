@@ -131,6 +131,8 @@ class GlassesServer:
                 log.warning("phone sent an unrecognized frame_source %.40r; treating it as unknown", raw)
             self._declared[conn] = declared
             self._set_frame_source(declared, "phone_status")
+            if self.control is not None:  # stream "starting" ends a wearer's stop
+                self.control.on_client_message(conn, msg)
 
     def _set_frame_source(self, value: str, why: str) -> None:
         """Logs once per change, never per frame."""

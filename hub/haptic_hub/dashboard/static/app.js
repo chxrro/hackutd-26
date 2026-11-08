@@ -97,7 +97,7 @@ function setBanner(b) {
   el.dataset.level = b.level;
   $("banner-title").textContent = b.title;
   $("banner-detail").textContent = b.detail;
-  $("banner-icon").textContent = { ok: "✓", paused: "II", test: "~", fault: "!" }[b.level] || "!";
+  $("banner-icon").textContent = { ok: "✓", paused: "II", stopped: "■", test: "~", fault: "!" }[b.level] || "!";
   const said = `${b.title}. ${b.detail}`;
   if (said !== lastAnnounced) { // announce changes only, not every update
     lastAnnounced = said;

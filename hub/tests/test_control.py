@@ -528,7 +528,7 @@ def test_sector_kinds_from_classified_boxes():
 def test_status_fields_shape_and_stale_results_give_no_kinds():
     c = Control(HubConfig())
     fields = c.status_fields(_classified_result(), OK, 5)
-    assert set(fields) == {"paused", "settings", "sectors"}
+    assert set(fields) == {"paused", "stopped", "settings", "sectors"}
     assert fields["sectors"][0] == {"kind": "person"} and len(fields["sectors"]) == 5
     stale = c.status_fields(_classified_result(), Health(False, "no camera frames for 2.0 s"), 5)
     assert stale["sectors"] == [{"kind": None}] * 5  # an old result says nothing about now

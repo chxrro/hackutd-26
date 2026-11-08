@@ -7,6 +7,11 @@ One Control object owns the settings and is the only place they change:
                status says ``healthy: false, reason: "alerts paused"``. Resuming
                plays the resume cue (cues.py).
   belt_test    a bounded left-to-right sweep (<= 3 s), refused while paused
+  stopped      the wearer pressed Stop (``end_session``, paired only): the belt
+               plays the session-ended cue once, then stays quiet; status says
+               ``healthy: false, reason: "stopped by wearer"``. The next frame, or
+               a ``phone_status`` with ``stream: "starting"``, starts a new session
+               and the resume cue plays once the hub is healthy again.
   alert_range  presets for how early alerts start (far_m / ttc_far_s)
   classifier   swap the cloud person/object backend in ClassifiedPerception
   record       stub until session recording lands
@@ -14,6 +19,12 @@ One Control object owns the settings and is the only place they change:
 Hardware and input faults always win over pause, on the belt (fault pattern) and
 in the status ``reason``, so a paused hub never hides "no camera frames". Pausing
 is explicit and felt; it is never a silent clear-path signal.
+
+A deliberate stop is the one exception for input faults: after ``end_session``
+the hub expects frames to stop, so "no camera frames" doesn't play the fault
+pattern. A phone that goes away *without* ``end_session`` (crash, Wi-Fi, app
+backgrounded) still gets the fault pattern. Belt link problems still win over
+the stop in ``reason``.
 """
 
 from __future__ import annotations
@@ -41,6 +52,7 @@ log = logging.getLogger(__name__)
 PAUSED_REASON = "alerts paused"
 BELT_TEST_REASON = "belt test"
 RESUME_REASON = "resuming alerts"
+STOPPED_REASON = "stopped by wearer"
 NOT_PAIRED = "not paired"
 
 
@@ -119,6 +131,11 @@ class Control:
         self._pause_started: float | None = None  # this quiet paused stretch (cue, then reminders)
         self._resume_pending = False
         self._resume_started: float | None = None
+        # The wearer ended the session (end_session). Only a frame received after
+        # _stopped_at, or phone_status "starting", ends it.
+        self.stopped = False
+        self._stopped_at: float | None = None
+        self._stop_cue_started: float | None = None
         self.belt_state: str | None = None  # kept current by the hub's belt loop
         self.belt_fault: str | None = None  # likewise (Belt.fault)
         self._lock = asyncio.Lock()
@@ -180,11 +197,40 @@ class Control:
                 self._resume_pending, self._resume_started = True, None
             self.paused = False
             return None
+        if action == "end_session":
+            self._end_session()
+            return None
         if action == "belt_test":
             return self._start_belt_test()
         if action == "set":
             return await self._set(msg.get("settings"))
         return "unknown action"
+
+    def _end_session(self) -> None:
+        """The wearer pressed Stop. Idempotent: a repeat doesn't replay the cue.
+        Clears pause too, so the next session starts with alerts on."""
+        if not self.stopped:
+            log.info("control: session ended by the wearer; expecting frames to stop")
+            self._stop_cue_started = None
+        self.stopped, self._stopped_at = True, self._clock()
+        self.paused, self._test_started = False, None
+        self._pause_started, self._resume_pending, self._resume_started = None, False, None
+
+    def _start_session(self, why: str) -> None:
+        if not self.stopped:
+            return
+        log.info("control: new session (%s)", why)
+        self.stopped, self._stopped_at, self._stop_cue_started = False, None, None
+        # Alerts are live again: the resume cue plays once the hub is healthy (a
+        # fault, e.g. "waiting for camera frames", plays first if frames lag).
+        self._resume_pending, self._resume_started = True, None
+
+    def note_frame(self, received_at: float) -> None:
+        """The hub's belt loop reports the newest frame's receive time (same clock as
+        Control's). A frame that arrived after end_session starts a new session; one
+        from before it doesn't, so frames already in flight can't undo a stop."""
+        if self.stopped and self._stopped_at is not None and received_at > self._stopped_at:
+            self._start_session("camera frames resumed")
 
     def _start_belt_test(self) -> str | None:
         if self.paused:
@@ -248,11 +294,17 @@ class Control:
     # -- WebSocket clients (phone via sources/glasses.py, dashboard) -------
 
     def on_client_message(self, conn: Any, msg: dict[str, Any]) -> None:
-        """hello / control text from a phone connection. Never blocks: a control
+        """hello / control / phone_status text from a phone connection. Never blocks: a control
         request is handled in a task that sends the ack to that connection only."""
+        kind = msg.get("type")
+        if kind == "phone_status":
+            # Any connection may *end* a stop: that only brings back alerts and,
+            # without frames, the fault pattern. Starting a stop needs pairing.
+            if msg.get("stream") == "starting":
+                self._start_session("phone started a new run")
+            return
         if conn is None:
             return
-        kind = msg.get("type")
         if kind == "hello":
             if self.is_code(msg.get("control_code")):
                 self._paired.add(conn)
@@ -312,9 +364,10 @@ class Control:
         belt_fault is the belt's own report that it isn't confirming commands while
         its link is up (Belt.fault, e.g. "belt not acknowledging").
 
-        Reason precedence: input/perception faults, then the belt link (disconnected
-        or connecting), then the belt not acknowledging, then pause / resume cue.
-        A belt test gives way to belt problems only; nothing else changed there."""
+        Reason precedence: input/perception faults (ignored while stopped by the
+        wearer), then the belt link (disconnected or connecting), then the belt not
+        acknowledging, then stopped by wearer, then pause / resume cue. A belt test
+        gives way to belt problems only; nothing else changed there."""
         self.belt_state, self.belt_fault = belt_state, belt_fault
         motors, ttl = len(cmd.levels), cmd.ttl_ms
         link = belt_link_reason(belt_state)
@@ -325,20 +378,27 @@ class Control:
         if (test := self._belt_test_command(now, motors, ttl)) is not None:
             self._resume_started = None  # a pending resume cue plays after the test
             return test, BELT_TEST_REASON  # these vibrations are not obstacles
-        if not health.ok:
+        if not health.ok and not self.stopped:
             # A real fault wins over pause and cues: the fault pattern goes out.
             # While paused, the pause cue plays again once the fault clears, so the
             # wearer knows the silence that follows is the pause, not "fault over".
             self._pause_started = self._resume_started = None
             return (BeltCommand.fault(motors, ttl) if self.paused else cmd), health.reason
         if link is not None:  # the belt can't hear us; its firmware plays the fault itself
-            self._pause_started = self._resume_started = None
+            self._pause_started = self._resume_started = self._stop_cue_started = None
             return BeltCommand.off(motors, ttl), link
         if unconfirmed is not None:
             # Writes may still get through now and then: if one does, it must be the
             # fault pattern, matching what the status says.
-            self._pause_started = self._resume_started = None
+            self._pause_started = self._resume_started = self._stop_cue_started = None
             return BeltCommand.fault(motors, ttl), unconfirmed
+        if self.stopped:
+            # Deliberate: the session-ended cue once (again after a belt problem
+            # clears, like the pause cue), then quiet. Never presented as healthy.
+            if self._stop_cue_started is None:
+                self._stop_cue_started = now
+            levels = cues.play(cues.session_end_cue(motors), now - self._stop_cue_started) or (0,) * motors
+            return _levels(levels, ttl), STOPPED_REASON
         if self.paused:
             if self._pause_started is None:
                 self._pause_started = now
@@ -356,9 +416,10 @@ class Control:
 
     def status_fields(self, result: PerceptionResult | None, health: Health | None, motors: int) -> dict[str, Any]:
         """The optional status additions from docs/protocol.md."""
-        fresh = result is not None and health is not None and health.ok
+        fresh = result is not None and health is not None and health.ok and not self.stopped
         return {
             "paused": self.paused,
+            "stopped": self.stopped,
             "settings": self.settings(),
             "sectors": [{"kind": k} for k in sector_kinds(result if fresh else None, motors, self.cfg.perception.min_box_height)],
         }

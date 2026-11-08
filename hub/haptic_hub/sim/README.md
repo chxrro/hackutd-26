@@ -82,6 +82,7 @@ These are assumptions, not radio measurements.
 | `head_turn`, `camera_motion`, `walking_sway` | alerts follow the head (documented); head sway/bob on still objects doesn't alert |
 | `low_confidence_person`, `flaky_detector`, `noisy_depth` | detections below `detector_conf`, 30% missed detections, depth biased 15% plus noise |
 | `camera_freeze`, `phone_disconnect` | stale or missing frames: fault after `frame_stale_s`, then recovery |
+| `user_stop`, `phone_vanishes`, `user_stop_unpaired` | the wearer's Stop (paired `end_session`): the session-ended cue (three pulses on motors 1+3), then quiet with status `stopped by wearer`, also while the phone's Wi-Fi drops; Start brings alerts back. A phone that vanishes without `end_session`, or an unpaired one that sends it, gets the fault pattern for as long as the hub runs |
 | `perception_crash`, `perception_stall` | model exceptions and hangs: fault, then recovery |
 | `belt_writes_lost`, `belt_disconnect` | the hub link goes quiet: the **firmware** TTL/link-lost logic plays the fault pattern, the phone is told `belt not acknowledging` / `belt disconnected` within one TTL + one status period, and the hub reconnects |
 | `garbage_frames`, `network_latency` | malformed packets and broken JPEGs are rejected without a fault; 200 ±100 ms latency |
@@ -90,6 +91,7 @@ Each check was confirmed to fail on a deliberately broken hub:
 - left/right swapped in the policy: caught by `pole_left` and `head_turn`;
 - a safety monitor that always reports healthy: caught by `camera_freeze` and `perception_stall`;
 - a 1000 ms belt TTL: caught by `belt_writes_lost`.
+- a hub that ignores `end_session`: caught by `user_stop` (fault pattern, no cue, wrong status).
 
 ## Findings from the probes (simulation, oracle perception, default config)
 
@@ -128,6 +130,7 @@ gives no feedback, and only the belt's TTL catches it (`belt_writes_lost`).
 
 Add a `Scenario(...)` in `scenarios.py`: a world factory, a duration, checks, and
 optional `faults` (`camera_freeze`, `phone_disconnect`, `garbage`, `latency`,
-`perception_crash`, `perception_stall`, `belt_drop`, `belt_disconnect`). Tag
+`perception_crash`, `perception_stall`, `belt_drop`, `belt_disconnect`,
+`user_stop`, `user_stop_unpaired`). Tag
 it `probe` if it documents a limitation instead of required behavior. Pick check
 windows from the scenario geometry, with some slack for the 15 fps pipeline.

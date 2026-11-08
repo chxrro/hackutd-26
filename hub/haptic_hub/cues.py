@@ -13,6 +13,8 @@ Shapes, chosen to differ from everything else the wearer can feel:
   pause      symmetric sweep from the outside in: outer pair, inner pair, centre
   resume     the reverse, from the centre out: centre, inner pair, outer pair
   reminder   while paused: one short low pulse on the outer pair, every 15 s
+  session    the wearer pressed Stop: three slow pulses on the inner pair,
+  ended      fading (strong, medium, soft), then nothing. Plays once.
 
 Never more than one ring of motors is on at once and never all motors at once,
 so no cue looks like the fault pattern. None of this has been felt on a real
@@ -55,6 +57,29 @@ def pause_cue(motors: int) -> tuple[Step, ...]:
 def resume_cue(motors: int) -> tuple[Step, ...]:
     """Inside out: "opening". 0.6 s for 5 motors."""
     return _sweep(motors, rings(motors)[::-1])
+
+
+SESSION_END_PULSE_S = 0.3  # twice a sweep step: slower than every other cue
+SESSION_END_GAP_S = 0.2
+SESSION_END_LEVELS = (CUE_LEVEL, 155, REMINDER_LEVEL)  # fading: "winding down"
+
+
+def session_end_cue(motors: int) -> tuple[Step, ...]:
+    """The wearer ended the session (docs/protocol.md, "end_session"): after the
+    usual leading gap, three slow pulses on the inner pair, each weaker than the
+    last. 1.45 s for 5 motors. Differs from the fault pattern (all motors, fast
+    double pulse, repeats), the pause/resume sweeps (move between rings), the
+    reminder (one short pulse on the outer pair) and the belt test (one motor at a
+    time). With fewer than 3 motors it falls back to the outer ring."""
+    ring_list = rings(motors)
+    ring = ring_list[1] if len(ring_list) > 1 else ring_list[0]
+    off = (0,) * motors
+    steps: list[Step] = [(CUE_STEP_S, off)]
+    for k, level in enumerate(SESSION_END_LEVELS):
+        if k:
+            steps.append((SESSION_END_GAP_S, off))
+        steps.append((SESSION_END_PULSE_S, _ring_levels(motors, ring, level)))
+    return tuple(steps)
 
 
 def duration(steps: tuple[Step, ...]) -> float:
