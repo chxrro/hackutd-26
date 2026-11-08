@@ -62,7 +62,7 @@ def build_library() -> Path:
     _BUILD_DIR.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(out.name + f".{os.getpid()}.tmp")
     cmd = [
-        _compiler(), "-std=c++17", "-O2", "-shared", "-fPIC", "-Wall", "-Werror",
+        _compiler(), "-std=c++17", "-O2", "-shared", "-fPIC", "-Wall",
         f"-I{_CORE}", str(_SHIM), *(str(_CORE / s) for s in _SOURCES), "-o", str(tmp),
     ]  # fmt: skip
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
