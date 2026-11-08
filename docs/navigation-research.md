@@ -5,11 +5,19 @@ decided or tested on hardware. It is written for the team to decide on. It
 does not change [protocol.md](protocol.md), the firmware, the hub, the phone
 app or [project-context.md](project-context.md).
 
-> **Implementation is on hold (owner decision, 2026-11-07).** Don't start the
-> route follower, the guidance composer or the protocol `location` message
-> until obstacle alerts work end to end in simulation. Every protocol change
-> in this doc is a **proposal**. None of it is in [protocol.md](protocol.md),
-> and nothing should be coded against it until the team agrees.
+> **Status update (2026-11-08).** The hold's condition is met: obstacle alerts
+> run end to end in simulation (hub sim world, PR #19) and live from the
+> glasses to phone vibration (Ray-Ban test session, 2026-11-08). A **phone-only
+> first slice** is now built in `meta/HapticBelt/Navigation/` (see §11):
+> spoken route directions from the phone's GPS and compass, which go quiet
+> whenever the hub reports an obstacle or fault. It needs **no protocol
+> change**. Still not built: belt guidance ticks, the hub guidance composer and
+> the `location` message. Every protocol change in this doc is still a
+> **proposal**; none of it is in [protocol.md](protocol.md).
+>
+> *Original note (owner decision, 2026-11-07): don't start the route follower,
+> the guidance composer or the protocol `location` message until obstacle
+> alerts work end to end in simulation.*
 
 Today the belt only gives obstacle alerts: "a motor's vibration = an obstacle
 in that direction, relative to the glasses camera." This doc asks how the same
@@ -503,10 +511,9 @@ Don't report accuracy or latency numbers that weren't measured.
 
 ## 9. Campus video demo: ECSW → Comets LANding [Proposal]
 
-> **On hold.** This is the build and test plan for when the team picks it up.
-> Owner decision (2026-11-07): don't implement the route follower, the
-> guidance composer or the `location` message until obstacle alerts work end
-> to end in simulation.
+> **Partly built (2026-11-08).** The phone-only slice in §11 replaces rows 1,
+> 2 and 6 of §9.3 for now, with the route follower on the phone instead of the
+> hub. Belt guidance (rows 3, 5 and 7) is still a proposal.
 
 The idea: guide a supervised wearer from the Engineering and Computer Science
 West building (ECSW) to the UTD Esports Center for the video demo. GPS gets
@@ -696,3 +703,51 @@ heading (§4.1). A belt IMU is the better long-term answer (§4.2).
     recorded walk (safer, less impressive)?
 14. **Phone work:** can Ethan add the `location` message once the hold lifts
     and the protocol proposal is agreed?
+
+---
+
+## 11. Built: phone-only campus route (2026-11-08) [Repo]
+
+Where: `meta/HapticBelt/Navigation/`, reached from **Campus route
+(experimental)** at the bottom of the app's main screen. Usage is in
+[meta/README.md](../meta/README.md#campus-route-experimental).
+
+- **Route data:** `ecsw-to-comets-landing.geojson`, the OSM route from §9.2
+  (about 320 m, footways only, ODbL attribution shown in the app). It has
+  **not been walked**. UTD has given permission to use its map, but no export
+  is in hand yet. When one arrives, replace the GeoJSON LineString; the code
+  doesn't change.
+- **Map:** SwiftUI MapKit (Apple map shown, which keeps us inside Apple's
+  terms, §5). No API key, no paid service.
+- **Follower (pure, unit-tested):** projects each fix onto the route and aims
+  10 m ahead (closer when more than 10 m off the path). It gives no direction
+  when the fix is stale (> 5 s) or worse than ±25 m, or when the facing
+  direction is unknown. The facing direction is the compass (accuracy ≤ 35°),
+  else the GPS course (walking ≥ 0.5 m/s), and the user can pick either. It
+  buckets the turn into straight / bear / turn / turn around, with 8°
+  hysteresis. Arrival is within 8 m, and it latches.
+- **Output: speech only.** Every phrase starts with "Route:". There is no
+  phone vibration, because on this app vibration means obstacles (AGENTS.md:
+  keep obstacle direction separate from travel direction). The belt is not
+  used for guidance yet.
+- **Priority (§3.3, applied to speech):** while the hub status is fresh and
+  shows any obstacle level > 0, a fault, or unhealthy, route speech is cut
+  mid-word and stays quiet. Guidance resumes 1.5 s after the alert clears,
+  once the instruction has been steady for 1 s. With no hub status, the
+  screen says in red that obstacle alerts are **not** running.
+- **Privacy:** location stays in memory. It isn't logged, stored or sent to
+  the hub.
+
+**Tested [simulation only]:** 18 hostless unit tests in
+`meta/HapticBeltTests/RouteGuidanceTests.swift`. They cover geometry,
+projection, buckets and hysteresis, stale and uncertain fixes, heading
+sources, the announcer's priority and hold-off, and a full simulated walk of
+the real route in both directions (start facing away, wander off the path,
+recover, arrive). The app was also run in the iOS Simulator with **Simulate
+the walk**. Not tested: real GPS or compass on campus, speech through the
+glasses, or guidance while the hub raises real alerts.
+
+**Next human test:** see the checklist in the meta README. Walk it with a
+sighted guide, phone held flat, hub connected, first without the
+blindfolded wearer.
+
