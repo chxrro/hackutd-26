@@ -100,17 +100,25 @@ connection. The code changes every time the hub restarts.
 | `action`    | Extra fields | Effect |
 |-------------|--------------|--------|
 | `get`       | none | No effect. Replies with the current settings, so it also checks pairing. |
-| `pause`     | none | Alerts stop: the belt gets `off`. Status shows `healthy: false`, `reason: "alerts paused"`, `paused: true`. |
-| `resume`    | none | Back to normal. |
+| `pause`     | none | Obstacle alerts stop. The belt plays the **pause cue**, then a **paused reminder** pulse every 15 s (see "Belt cues" in section 3). Status shows `healthy: false`, `reason: "alerts paused"`, `paused: true`. |
+| `resume`    | none | The belt plays the **resume cue** (≤ 0.6 s, status `reason: "resuming alerts"`), then back to normal. |
 | `belt_test` | none | The hub plays a short sweep across the motors (≤ 3 s), then goes back to normal. Refused while paused, while a test is running, or while the belt is disconnected. |
 | `set`       | `settings` object, one or more keys below | Change settings. Unknown keys reject the whole request. |
 
 `pause` and `resume` are idempotent. `pause` also stops a running belt test.
 
-While paused, the belt stays `off`, but a real fault takes priority in
-`reason`: `"no camera frames for 1.2 s"`, `"perception failing: ..."`,
-`"belt disconnected"` or `"belt connecting"` replace `"alerts paused"`. Read
-`paused` to tell whether alerts are paused. Don't infer it from `reason`.
+While paused, a real fault takes priority on the belt and in `reason`. The belt
+plays the fault pattern, and `"no camera frames for 1.2 s"`,
+`"perception failing: ..."`, `"belt disconnected"` or `"belt connecting"`
+replace `"alerts paused"`. When the fault clears and alerts are still paused,
+the pause cue plays again. Read `paused` to tell whether alerts are paused.
+Don't infer it from `reason`. (Changed 2026-11-08: before this, the belt stayed
+`off` during a fault while paused.)
+
+While the pause cue, a paused reminder or the resume cue plays, status shows
+`mode: "levels"` with those levels. They are not obstacles. `reason` is
+`"alerts paused"` or `"resuming alerts"`. If a fault starts during a cue, the
+fault wins. A resume cue cut off by a fault plays once the fault clears.
 
 During a belt test, status shows `mode: "levels"`, `healthy: false` and
 `reason: "belt test"`. Those vibrations are not obstacles.
@@ -189,6 +197,21 @@ Info payload (read): `[protocol_version, motor_count]`, e.g. `01 05`.
   vouch for its output: no camera frames, perception failing, or the hub link
   lost. The wearer must not treat this, or silence, as a clear path.
 - **Silence means no alert, not a clear path.**
+
+### Belt cues (hub, added 2026-11-08)
+
+The hub builds these from ordinary `levels` commands at its normal TTL and send
+rate. The firmware and the command format are unchanged. Every cue starts with
+a 0.15 s gap and never drives every motor at once, so it can't be mistaken for
+the fault pattern. Times are for 5 motors (`L2 L1 C R1 R2`). Level 200, except
+the reminder. None of this has been felt on a real belt yet.
+
+| Cue | Pattern | Meaning |
+|-----|---------|---------|
+| Pause | Outside in: both outer motors, then both inner motors, then the centre, 0.15 s each (0.6 s with the gap). Plays once. | Alerts are paused. Silence that follows is the pause, not a clear path. It also plays when a fault or belt disconnect ends while still paused. |
+| Paused reminder | One 0.15 s pulse on both outer motors at low level (110), every 15 s after the pause cue. Configurable (`--pause-reminder`, `0` = off, else ≥ 2 s). | Alerts are still paused. |
+| Resume | Inside out: the centre, then both inner motors, then both outer motors, 0.15 s each (0.6 s with the gap). Obstacle alerts start right after. | Alerts are live again. |
+| Belt test (existing) | One motor at a time, left to right, 0.4 s each (≤ 3 s). | Test only. Real alerts are replaced for its duration. |
 
 ### Belt failsafe behavior (firmware)
 

@@ -36,11 +36,11 @@ def _local_ip() -> str:
             return "127.0.0.1"
 
 
-def _make_belt(kind: str, motors: int, address: str | None):
+def _make_belt(kind: str, motors: int, address: str | None, sim_log_s: float = 0.5):
     if kind == "sim":
         from haptic_hub.belt.sim import SimBelt
 
-        return SimBelt(motors)
+        return SimBelt(motors, sim_log_s)
     from haptic_hub.belt.ble import BleBelt
 
     return BleBelt(motors, address)
@@ -88,6 +88,12 @@ async def _run(args: argparse.Namespace) -> None:
 
         cfg.perception.openvocab_prompts = parse_prompts(args.prompts)
     cfg.perception.motion = args.motion
+    from haptic_hub.cues import check_reminder_s
+
+    try:
+        cfg.haptics.pause_reminder_s = check_reminder_s(args.pause_reminder)
+    except ValueError as exc:
+        raise SystemExit(f"--pause-reminder: {exc}") from exc
     if args.motion == "flow" and args.perception not in ("vision", "detector"):
         raise SystemExit("--motion flow needs the detector's tracked boxes: use --perception vision or detector")
 
@@ -106,7 +112,7 @@ async def _run(args: argparse.Namespace) -> None:
             perception = await asyncio.to_thread(build_classified, perception, cfg.classifier)
         except NimSetupError as exc:
             raise SystemExit(f"cloud classifier: {exc}") from exc
-    belt = _make_belt(args.belt, cfg.perception.sectors, args.belt_address)
+    belt = _make_belt(args.belt, cfg.perception.sectors, args.belt_address, args.sim_log_interval)
 
     viewer = None
     if args.show:
@@ -326,6 +332,20 @@ def main() -> None:
     )
     run.add_argument("--belt", default="ble", choices=["ble", "sim"])
     run.add_argument("--belt-address", help="skip scanning and connect to this BLE address/UUID")
+    run.add_argument(
+        "--sim-log-interval",
+        type=float,
+        default=0.5,
+        metavar="SECONDS",
+        help="--belt sim: log belt changes at most this often (default 0.5; 0 = every change, e.g. to see cues)",
+    )
+    run.add_argument(
+        "--pause-reminder",
+        type=float,
+        default=15.0,
+        metavar="SECONDS",
+        help="while alerts are paused, a low pulse on the outer motors this often (default 15; 0 = off, else >= 2)",
+    )
     run.add_argument("--port", type=int, default=8765, help="WebSocket port for the phone")
     run.add_argument("--device", help="torch device: mps, cuda or cpu (default: auto)")
     run.add_argument("--outdoor", action="store_true", help="use the outdoor metric depth model")

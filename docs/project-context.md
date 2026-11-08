@@ -74,6 +74,7 @@ Owner decisions only. Proposals that nobody has decided are listed separately be
 | Navigation guidance (#13) | Implementation on hold until obstacle alerts work end to end in simulation | Owner decision recorded in [navigation-research.md](navigation-research.md); its patterns and messages are proposals |
 | Wearer app (#17) | `ios/` (Ethan's Camera Bridge) overhauled into the wearer-facing app: hub streaming, Control pairing, VoiceOver-first wearer screen, debug-only mock glasses | The owner chose it, per #17's description. This supersedes "the phone app is parked" in the Focus row. Whether `meta/` is retired is still open |
 | Integration (2026-11-08) | One integration thread merges into `main`; each PR is tested against current `main` (hub suite + simulation smoke run) and must pass CI (#16) | Four people and their agents work in parallel |
+| Pause is felt (2026-11-08) | `pause` plays an outside-in cue on the belt, then a low outer-motor pulse every 15 s (`--pause-reminder`, 0 = off); `resume` plays an inside-out cue. A camera or perception fault plays the fault pattern even while paused. Built from ordinary `levels` commands, no firmware change. See [protocol.md "Belt cues"](protocol.md) | Integrator review of PR #14: pause sent `off`, so the wearer felt the same silence as "no obstacle", and a fault while paused was also silent. AGENTS.md: silence must never stand in for a clear path. Verified only in unit tests and `--belt sim`, not felt on a real belt |
 
 ## Proposals, not decided
 

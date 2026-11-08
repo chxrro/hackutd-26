@@ -31,7 +31,15 @@ from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
 
-from haptic_hub.control import ALERT_RANGES, BELT_TEST_REASON, PAUSED_REASON, Control, belt_link_reason, ws_logger
+from haptic_hub.control import (
+    ALERT_RANGES,
+    BELT_TEST_REASON,
+    PAUSED_REASON,
+    RESUME_REASON,
+    Control,
+    belt_link_reason,
+    ws_logger,
+)
 from haptic_hub.protocol import BeltCommand
 from haptic_hub.types import Frame, PerceptionResult
 
@@ -75,9 +83,21 @@ def banner(status: dict[str, Any]) -> dict[str, str]:
     if reason == BELT_TEST_REASON:
         return {"level": "test", "title": "Belt test running", "detail": "Motors sweep left to right. These vibrations are not obstacles."}
     if reason == PAUSED_REASON:
-        return {"level": "paused", "title": "Alerts paused", "detail": "The belt is silent on purpose. Silence does not mean the path is clear."}
+        return {
+            "level": "paused",
+            "title": "Alerts paused",
+            "detail": "The belt played the pause cue and gives a short reminder pulse while paused. "
+            "Silence does not mean the path is clear.",
+        }
+    if reason == RESUME_REASON:
+        return {"level": "test", "title": "Resuming alerts", "detail": "The belt plays the resume cue. These vibrations are not obstacles."}
     if reason is not None:
-        detail = "Alerts are paused too; the belt is off." if paused else "The belt plays the fault pattern. Do not rely on it."
+        if paused and belt_link_reason(belt) == reason:
+            detail = "Alerts are paused too. Commands are not reaching the belt."
+        elif paused:
+            detail = "Alerts are paused too, but the belt plays the fault pattern. Do not rely on it."
+        else:
+            detail = "The belt plays the fault pattern. Do not rely on it."
         return {"level": "fault", "title": f"FAULT: {reason}", "detail": detail}
     if (link := belt_link_reason(belt)) is not None:
         return {"level": "fault", "title": f"FAULT: {link}", "detail": "Commands are not reaching the belt. The wearer feels nothing."}
