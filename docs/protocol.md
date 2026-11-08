@@ -92,6 +92,12 @@ change the belt output.
 - `healthy: false` means the hub can't vouch for the output. `reason` says why,
   e.g. `"no camera frames for 1.2 s"`.
 - `belt`: `connected` | `connecting` | `disconnected` | `simulated`.
+- `frame_source` (optional, additive 2026-11-08): only when the hub's source
+  is the phone. The `frame_source` declared by the connection that sent the
+  newest frame (or the newest `phone_status`, before any frame):
+  `glasses` | `mock` | `test_pattern` | `unknown`. Treat anything other than
+  `glasses` as not the real glasses. Absent with other hub sources (webcam,
+  video, replay); `source` names those.
 - Belt reasons (changed 2026-11-08, hub only): `"belt disconnected"` and
   `"belt connecting"` now set `healthy: false` whether or not alerts are paused
   (before, an unpaused hub said `healthy: true` with `belt: "disconnected"`).
@@ -123,12 +129,6 @@ change the belt output.
   shows it applied a recent command), `"ack"` (writes are acknowledged, but no
   matching status: old firmware, or the status isn't confirming), or `null`
   (nothing confirms the belt is following the hub).
-- `frame_source` (optional, additive 2026-11-08): only when the hub's source
-  is the phone. The `frame_source` declared by the connection that sent the
-  newest frame (or the newest `phone_status`, before any frame):
-  `glasses` | `mock` | `test_pattern` | `unknown`. Treat anything other than
-  `glasses` as not the real glasses. Absent with other hub sources (webcam,
-  video, replay); `source` names those.
 
 ### Control (WebSocket text JSON, additive, draft 2026-11-07)
 
