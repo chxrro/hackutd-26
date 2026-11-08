@@ -68,6 +68,7 @@ class PerceptionConfig:
     ttc_far_s: float = 3.0  # beyond this: no risk
     min_box_height: float = 0.08  # ignore detections smaller than this fraction of frame height
     detector_conf: float = 0.35
+    robust_ttc: bool = False  # stable alert profile: reject jitter/clipping before inferring approach
     # Which detector feeds the tracker: "yolo" = yolo_model (80 COCO classes),
     # "openvocab" = YOLOE prompted with openvocab_prompts (perception/openvocab.py).
     detector: str = "yolo"
@@ -106,6 +107,12 @@ class ClassifierConfig:
 
 @dataclass
 class HapticsConfig:
+    profile: str = "baseline"  # "baseline" | "stable" (experimental, opt-in)
+    confirm_s: float = 0.20  # stable: sustained moderate risk before a new alert
+    confirm_frames: int = 3  # repeated heartbeats do not count
+    confirm_max_gap_s: float = 0.30
+    urgent_risk: float = 0.80  # bypass confirmation; not a calibrated probability
+    release_tau_s: float = 0.15  # stable: time-based decay instead of per-frame decay
     send_hz: float = 15.0  # belt heartbeat rate; must be well above 1000/ttl_ms
     ttl_ms: int = 250  # belt stops/faults if it hears nothing for this long
     release: float = 0.6  # 0..1, how slowly alerts fade (rising risk applies instantly)

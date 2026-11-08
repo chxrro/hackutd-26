@@ -77,6 +77,9 @@ async def _run(args: argparse.Namespace) -> None:
 
     cfg = HubConfig()
     cfg.ws_port = args.port
+    cfg.haptics.profile = args.alert_profile
+    cfg.perception.robust_ttc = args.alert_profile == "stable"
+    log.info("alert profile: %s", args.alert_profile)
     if args.outdoor:
         cfg.perception.depth_model = cfg.perception.depth_model.replace("Indoor", "Outdoor")
     if args.device:
@@ -325,6 +328,8 @@ def main() -> None:
         help="glasses (default), webcam[:N], video:PATH, stream:URL (rtsp://, http:// MJPEG, ...), or replay:DIR (a --record session)",
     )
     run.add_argument("--perception", default="vision", choices=["vision", "depth", "detector", "sweep"])
+    run.add_argument("--alert-profile", choices=["baseline", "stable"], default="baseline",
+                     help="stable: confirm moderate alerts and reject noisy box-growth estimates (experimental)")
     run.add_argument(
         "--motion",
         default="off",
@@ -370,6 +375,13 @@ def main() -> None:
 
     sub.add_parser("scan", help="look for the belt over BLE")
 
+    evaluate = sub.add_parser("evaluate", help="offline baseline/stable comparison on a private recorded session")
+    evaluate.add_argument("--session", required=True, help="recording folder containing frames.jsonl")
+    evaluate.add_argument("--output", required=True, help="new local JSON report (keep under recordings/)")
+    evaluate.add_argument("--max-frames", type=int, default=1000)
+    evaluate.add_argument("--device", default="auto")
+    evaluate.add_argument("--motion", choices=["off", "flow"], default="flow")
+
     bench = sub.add_parser("nim-bench", help="measure cloud classifier round trips on one image")
     bench.add_argument("--image", required=True, help="a photo with people and/or objects in it")
     bench.add_argument("-n", type=int, default=10, help="number of sequential requests")
@@ -392,7 +404,10 @@ def main() -> None:
 
     from haptic_hub.app import UserQuit
 
-    commands = {"run": _run, "belt-test": _belt_test, "scan": _scan, "nim-bench": _nim_bench, "bench": bench_command}
+    from haptic_hub.evaluate import evaluate_command
+
+    commands = {"run": _run, "belt-test": _belt_test, "scan": _scan, "nim-bench": _nim_bench,
+                "bench": bench_command, "evaluate": evaluate_command}
     try:
         code = asyncio.run(commands[args.command](args))
     except (KeyboardInterrupt, UserQuit):

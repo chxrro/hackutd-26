@@ -31,7 +31,7 @@ import numpy as np
 from haptic_hub.config import FlowConfig
 from haptic_hub.perception.base import Perception
 from haptic_hub.perception.geometry import box_sectors, linear_risk
-from haptic_hub.types import Frame, PerceptionResult
+from haptic_hub.types import Frame, PerceptionResult, SectorRisk
 
 Box = tuple[float, float, float, float]  # x1, y1, x2, y2 in pixels of the gray image
 
@@ -249,20 +249,25 @@ class FlowMotion:
                 crossing = cfg.crossing_risk
         return TrackMotion(tid, label, box, "measured", ttc, med_vx, swept, approach, crossing)
 
-    def sector_contributions(self, motions: Sequence[TrackMotion], width: int) -> list[tuple[float, float | None, str | None]]:
-        """Per sector: (risk, ttc_s, label) from flow alone."""
-        out: list[tuple[float, float | None, str | None]] = [(0.0, None, None)] * self.sectors
+    def sector_evidence(self, motions: Sequence[TrackMotion], width: int) -> list[SectorRisk]:
+        """Keep the winning motion and track attached to the risk it caused."""
+        out = [SectorRisk(0.0) for _ in range(self.sectors)]
         for m in motions:
             parts = []
             if m.approach_risk > 0:
-                parts += [(s, m.approach_risk, m.ttc_s) for s in box_sectors(m.box[0], m.box[2], width, self.sectors)]
+                parts += [(s, m.approach_risk, m.ttc_s, "flow_approach", "approaching")
+                          for s in box_sectors(m.box[0], m.box[2], width, self.sectors)]
             if m.crossing_risk > 0:
-                parts += [(s, m.crossing_risk, None) for s in m.crossing_sectors]
-            for s, risk, ttc in parts:
-                old_risk, old_ttc, old_label = out[s]
-                best_ttc = ttc if old_ttc is None or (ttc is not None and ttc < old_ttc) else old_ttc
-                out[s] = (risk, best_ttc, m.label) if risk > old_risk else (old_risk, best_ttc, old_label)
+                parts += [(s, m.crossing_risk, None, "flow_crossing", "crossing")
+                          for s in m.crossing_sectors]
+            for s, risk, ttc, evidence, motion in parts:
+                if risk > out[s].risk:
+                    out[s] = SectorRisk(risk, ttc_s=ttc, label=m.label,
+                                        evidence=evidence, motion=motion, track_id=m.track_id)
         return out
+
+    def sector_contributions(self, motions: Sequence[TrackMotion], width: int) -> list[tuple[float, float | None, str | None]]:
+        return [(s.risk, s.ttc_s, s.label) for s in self.sector_evidence(motions, width)]
 
 
 def _xyxy(b: Any) -> Box:
@@ -292,12 +297,11 @@ class FlowMotionPerception:
         motions, info = self.motion.update(frame.received_at, gray, result.debug["boxes"])
 
         sectors = []
-        for base, (risk, ttc, label) in zip(result.sectors, self.motion.sector_contributions(motions, w), strict=True):
-            merged_ttc = base.ttc_s if ttc is None or (base.ttc_s is not None and base.ttc_s <= ttc) else ttc
-            if risk > base.risk:
-                sectors.append(replace(base, risk=risk, ttc_s=merged_ttc, label=label or base.label))
+        for base, contribution in zip(result.sectors, self.motion.sector_evidence(motions, w), strict=True):
+            if contribution.risk > base.risk:
+                sectors.append(replace(contribution, nearest_m=base.nearest_m))
             else:
-                sectors.append(replace(base, ttc_s=merged_ttc))
+                sectors.append(base)
         flow_ms = (time.perf_counter() - started) * 1000
         debug = {**result.debug, "flow": {**info, "tracks": motions, "ms": round(flow_ms, 2)}}
         return replace(result, sectors=tuple(sectors), inference_ms=result.inference_ms + flow_ms, debug=debug)

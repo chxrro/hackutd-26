@@ -19,6 +19,7 @@ from haptic_hub.belt.base import Belt
 from haptic_hub.config import HubConfig
 from haptic_hub.control import Control
 from haptic_hub.haptics import HapticPolicy
+from haptic_hub.hazards import hazard_snapshot
 from haptic_hub.latency import LatencyStats
 from haptic_hub.perception.base import Perception
 from haptic_hub.protocol import BeltCommand
@@ -55,6 +56,7 @@ class Hub:
         self.safety = SafetyMonitor(cfg.safety)
         self.policy = HapticPolicy(cfg.haptics, cfg.perception.sectors)
         self.result: PerceptionResult | None = None
+        self.command_result: PerceptionResult | None = None
         self.frame: Frame | None = None
         self.command: BeltCommand = BeltCommand.fault(cfg.perception.sectors)
         self.reason: str | None = "starting"
@@ -120,7 +122,8 @@ class Hub:
                 self.control.note_frame(latest.received_at)  # a frame after end_session starts a new session
             health = self.safety.check(started)
             self.health = health
-            command = self.policy.command(self.result, health)
+            self.command_result = self.result
+            command = self.policy.command(self.command_result, health)
             belt_fault = getattr(self.belt, "fault", None)  # e.g. "belt not acknowledging", "belt TTL expired"
             self.command, reason = self.control.apply(command, health, self.belt.state, started, belt_fault)
             if reason != self.reason:
@@ -167,6 +170,8 @@ class Hub:
             "source": self.source.name,
             "inference_ms": round(self.result.inference_ms, 1) if self.result else None,
             "frame_age_ms": round(age * 1000, 1) if age is not None else None,
+            "hazards": hazard_snapshot(self.command_result, self.command, self.reason is None, now,
+                                       self.cfg.safety.result_max_age_s, self.cfg.haptics.deadband),
             **self._frame_source_field(),
             **self.control.status_fields(self.result, self.health, self.cfg.perception.sectors),
         }
