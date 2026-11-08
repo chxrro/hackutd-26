@@ -1,5 +1,108 @@
 # meta/: iPhone app for the Meta glasses
 
+## Test-day checklist (glasses → phone → hub)
+
+> Experimental prototype. Test seated or standing still, with a sighted
+> supervisor. **Silence is not a clear path.** Don't walk with it.
+
+**1. Build and install** (Mac, iPhone plugged in, unlocked, "Trust" tapped,
+iOS Developer Mode on: Settings → Privacy & Security → Developer Mode)
+
+```bash
+cd meta
+cp Config/Local.xcconfig.example Config/Local.xcconfig   # once: DEVELOPMENT_TEAM, BUNDLE_ID_SUFFIX
+xcodegen generate
+open HapticBelt.xcodeproj        # pick the iPhone as destination, press Run (easiest)
+```
+
+Or from the terminal (`<UDID>` from `xcrun devicectl list devices`, "Reality: physical"):
+
+```bash
+xcodebuild -project HapticBelt.xcodeproj -scheme HapticBelt -configuration Debug \
+  -destination 'platform=iOS,id=<UDID>' -derivedDataPath build -allowProvisioningUpdates build
+xcrun devicectl device install app --device <UDID> build/Build/Products/Debug-iphoneos/HapticBelt.app
+xcrun devicectl device process launch --console --device <UDID> com.hackutd26.hapticbelt<BUNDLE_ID_SUFFIX>
+```
+
+`-allowProvisioningUpdates` (or Xcode's Run) registers a new iPhone with the
+team the first time. The development profile covers only registered devices.
+
+**2. Hub** (Mac):
+
+```bash
+cd hub && uv sync --extra vision
+uv run haptic-hub run --source glasses --belt sim --show
+#   prints:  in the phone app, set the hub address to  ws://<mac-ip>:8765
+```
+
+The address it prints is a guess (the default route). If the Mac has several
+networks, check with `ipconfig getifaddr en0` (Wi-Fi).
+
+**3. Glasses** (once per phone): Meta AI app has the glasses paired and
+**Developer Mode** on (Meta AI → Settings → App Info → tap the version 5×).
+Developer Mode switches off after glasses firmware updates.
+
+**4. App**, top to bottom:
+1. **Connect glasses in Meta AI** → bounces to Meta AI → back. If the SDK says
+   the glasses' app component needs an update (seen on 2026-11-07 with
+   `ios/`), tap **Update glasses app in Meta AI**, finish it there, come back.
+2. **Start camera**. The first time, Meta AI asks for glasses camera
+   permission. Camera should go `starting` → `streaming` and show a preview.
+3. Hub address = what the hub printed. Turn on **Connect to hub**. Allow
+   **Local Network** when iOS asks.
+4. Keep the app in the foreground, screen on.
+
+**5. What you should see**
+
+| Where | Working | Not working |
+|---|---|---|
+| App, Hub → Link | `connected`, **Frames sent** climbing | `connecting…` / `retrying (…)`, see network below |
+| Hub log | `phone connected from ('<phone-ip>', …)`, `phone says hello`, `phone glasses stream: streaming`, `health: ok` | nothing (phone never reached the Mac), or `health: no camera frames for N s` (connected, no frames) |
+| App, Belt | **levels**: green "Alerts active", red bars of varying height | **fault**: orange "Not reliable: <reason>", flat orange bars. "No status from the hub" = no status for 2 s: treat it as a fault |
+| Hub terminal (`--belt sim`) | `belt LEVELS [ ▃█▃ ]` | `belt FAULT  [!!!!!]` |
+
+Fault at startup (`perception warming up`, `waiting for camera frames`) is
+expected for the first seconds.
+
+**6. Network: if the phone can't reach the hub**
+
+First, find which part fails. In Safari on the iPhone, open
+`http://<mac-ip>:8765/`:
+- Page says **"Failed to open a WebSocket connection…"**: the network path and
+  hub are fine. The app is the problem: check the address, and check
+  Settings → Privacy & Security → **Local Network** → Haptic Belt is on.
+- Page **times out**: packets don't reach the Mac (client isolation, wrong IP,
+  or firewall). Try the fallbacks below.
+- **"Could not connect to the server"**: the Mac is reachable but nothing is
+  listening. The hub isn't running, or you used the wrong port.
+
+App link errors mean the same: `retrying (The request timed out.)` means
+unreachable, `retrying (Could not connect to the server.)` means nothing is
+listening, and an "offline" or "local network" error usually means the Local
+Network permission is off.
+
+Fallbacks, in order:
+1. **Same Wi-Fi, firewall open.** System Settings → Network → Firewall: off,
+   or allow incoming connections for Python. Check with
+   `/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate`. Venue and
+   campus Wi-Fi often isolate clients; if the Safari test times out with the
+   firewall off, move on.
+2. **iPhone Personal Hotspot, Mac joins it.** iPhone: Settings → Personal
+   Hotspot → Allow Others to Join. Mac joins that Wi-Fi. Restart the hub so it
+   prints the new `172.20.10.x` address and use that. Needs a carrier plan with
+   hotspot.
+3. **Same hotspot over USB.** With Personal Hotspot on and the iPhone plugged
+   in, the Mac gets an "iPhone USB" network (System Settings → Network). Turn
+   Mac Wi-Fi off so the hub prints the `172.20.10.x` address. No Wi-Fi needed.
+4. **Another device's hotspot or a travel router** that both the iPhone and Mac
+   join (a teammate's phone, a pocket router). Run the same Safari test.
+
+Not tested yet: whether the glasses camera stream still works while the iPhone
+is a hotspot (fallbacks 2 and 3). The SDK may use the phone's Wi-Fi for the
+glasses link. Check that the camera still shows `streaming`.
+
+## Overview
+
 Streams the Ray-Ban Meta camera to the hub over Wi-Fi and shows what the belt
 is doing. It doesn't run the model and doesn't talk to the belt; the hub does
 both.

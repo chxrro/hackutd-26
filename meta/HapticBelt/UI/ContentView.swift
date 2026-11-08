@@ -68,6 +68,8 @@ private struct GlassesSection: View {
           Button("Start camera") { glasses.start() }
             .disabled(!glasses.canStart)
         }
+        Button("Update glasses app in Meta AI") { glasses.openGlassesAppUpdate() }
+          .font(.footnote)
         if glasses.isStreaming, let preview {
           Image(uiImage: preview)
             .resizable()
@@ -106,7 +108,9 @@ private struct HubSection: View {
     } header: {
       Text("Hub")
     } footer: {
-      Text("The hub prints its address when it starts. Phone and laptop must be on the same Wi-Fi.")
+      Text(
+        "The hub prints its address when it starts. Phone and laptop must be on the same network (Wi-Fi or the phone's hotspot). \"retrying (timed out)\" usually means the network blocks phone-to-laptop traffic."
+      )
     }
   }
 
