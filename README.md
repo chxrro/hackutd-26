@@ -5,7 +5,7 @@
 **First-person video in, directional vibration out.**
 A wearable collision-alert prototype for blind and low-vision users, built at HackUTD 2026.
 
-[![CI](https://github.com/chxrro/hackutd-26/actions/workflows/ci.yml/badge.svg)](https://github.com/chxrro/hackutd-26/actions/workflows/ci.yml)
+[![CI](https://github.com/chxrro/wayfeel/actions/workflows/ci.yml/badge.svg)](https://github.com/chxrro/wayfeel/actions/workflows/ci.yml)
 ![Firmware](https://img.shields.io/badge/firmware-ESP32%20%C2%B7%20PlatformIO-1f2328)
 ![Hub](https://img.shields.io/badge/hub-Python%203.11%2B%20%C2%B7%20PyTorch-1f2328)
 ![App](https://img.shields.io/badge/app-iOS%2017.2%2B%20%C2%B7%20Swift-1f2328)
