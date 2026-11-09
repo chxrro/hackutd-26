@@ -73,7 +73,7 @@ Opt-in alternatives: `--detector openvocab` swaps YOLO11n for text-prompted [YOL
 </td>
 <td valign="top">
 
-Hub renderer output while streaming live from the glasses (10 s excerpt, 8 fps GIF). **[Full 60 s recording (MP4)](docs/media/yolo-demo.mp4).**
+Hub renderer output while streaming live from the glasses (10 s excerpt, 8 fps GIF). **[Full 60 s recording (MP4)](docs/media/yolo-demo.mp4).** Bystanders' faces are blurred in post-processing.
 
 Real models on real glasses frames: Depth Anything V2 Metric Indoor Small and YOLO11n + ByteTrack on Apple MPS. Phone haptics were enabled; **no physical belt was connected**, so motor output is the hub's computed levels.
 
