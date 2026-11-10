@@ -163,7 +163,7 @@ servers don't log message payloads.
 | pause / resume | Pause: the belt plays the pause cue (outside in, 0.6 s), then one low pulse on the outer motors every 15 s (`--pause-reminder SECONDS`, `0` = off). Status: `healthy: false`, `reason: "alerts paused"`. Resume: the resume cue (inside out, 0.6 s, `reason: "resuming alerts"`), then normal alerts. A camera or perception fault still plays the fault pattern while paused and shows as the reason. See `docs/protocol.md`, "Belt cues". |
 | end session | Phone only (paired): the wearer pressed Stop. The belt plays the session-ended cue (three fading pulses on the inner motors, 1.45 s), then stays quiet. Status: `healthy: false`, `reason: "stopped by wearer"`, `stopped: true`; "no camera frames" doesn't fault while stopped. A phone that disconnects or stops sending without it still gets the fault pattern. The next frame or `phone_status` `"starting"` starts a new session with the resume cue. See `docs/protocol.md`, "Deliberate stop vs. lost phone". |
 | belt test | Each motor in turn, left to right, 0.4 s each (2 s for 5 motors, never over 3 s). Refused while paused. Status reason `"belt test"`. Real alerts are replaced by the sweep for those ≤ 3 s, so don't run it on a walk. |
-| classifier | `local` ⇄ `nim` at runtime. `nim` is only allowed if the hub started with a cloud endpoint (`--classifier nim`, `--nim-url`, `--nim-env`, or `NIM_BASE_URL` / `NIM_API_KEY` / `NVIDIA_API_KEY`). Each switch to `nim` probes the endpoint again; if that fails, nothing changes. |
+| classifier | `local` ⇄ `nim` at runtime. `nim` is only allowed if the hub started with a cloud endpoint (`--classifier auto` that reached Nemotron, `--classifier nim`, `--nim-url`, `--nim-env`, `~/.config/haptic-hub/nim.env`, or `NIM_BASE_URL` / `NIM_API_KEY` / `NVIDIA_API_KEY`). Each switch to `nim` probes the endpoint again; if that fails, nothing changes. |
 | alert range | Presets for where alerts start (below). |
 | record | Not wired to the control layer yet: `true` is refused with `"recording not available"`. Start the hub with `--record` instead (see Recording and replay). |
 
@@ -258,10 +258,16 @@ Every tracked box gets a **person** or **object** label. The `--show` window
 draws people in magenta (`PERSON #3 (local)`) and objects in orange
 (`object:chair #5 (local)`). The labels do not change the belt output yet.
 
-- `--classifier local` (default): the detector's own COCO class. YOLO's
+- `--classifier auto` (default): Nemotron (below) if its endpoint answers
+  `/models` at startup. Otherwise the hub logs `Nemotron classifier
+  unavailable, using local person/object labels: <reason>` and runs with
+  `local`. The endpoint comes from `--nim-env`, the environment, or
+  `~/.config/haptic-hub/nim.env` if that file exists.
+- `--classifier local`: the detector's own COCO class. YOLO's
   `person` class means person and every other class means object. This adds
-  no model and no measurable time.
-- `--classifier nim`: a Nemotron vision model labels the same boxes. YOLO stays
+  no model and no measurable time, and skips the startup probe.
+- `--classifier nim`: same as `auto`, but refuses to start if the endpoint
+  doesn't answer. A Nemotron vision model labels the same boxes. YOLO stays
   the fast path for collision risk. In the background, at most `max_hz` (2/s)
   and one request at a time, the hub draws numbered boxes on a 512 px copy of
   the frame and asks the model which are people. The answer is cached per track
@@ -288,7 +294,8 @@ works. Settings come from flags or the environment:
 | model | `--nim-model` | `NIM_MODEL` | hosted: `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`; own server: the first model it lists |
 | key | - | `NIM_API_KEY`, else `NVIDIA_API_KEY` | none; required for the hosted API |
 
-`--nim-env FILE` loads `KEY=VALUE` lines first. Keep that file outside the repo.
+`--nim-env FILE` loads `KEY=VALUE` lines first; without it the hub loads
+`~/.config/haptic-hub/nim.env` if that file exists. Keep that file outside the repo.
 
 ```bash
 # Self-hosted (e.g. vLLM on a Brev GPU, see below), endpoint in a private env file
@@ -305,6 +312,31 @@ uv run haptic-hub nim-bench --image photo.jpg -n 20 --nim-env ~/.config/haptic-h
 
 At startup the hub calls `GET /models`. A wrong URL, a missing hosted key, or a
 model the server doesn't list stops it with a clear message.
+
+### Serving Nemotron locally (Mac, llama.cpp)
+
+No cloud GPU needed. [llama.cpp](https://github.com/ggml-org/llama.cpp)'s
+`llama-server` is OpenAI-compatible and runs the same model as a GGUF from
+[Unsloth](https://huggingface.co/unsloth/NVIDIA-Nemotron-3-Nano-Omni-30B-A3B-Reasoning-GGUF)
+on Apple GPUs. The default 4-bit file (`MXFP4_MOE`) is 21.7 GB, plus the
+1.6 GB vision projector, and it sits in unified memory next to YOLO and depth,
+so expect to need a 32 GB+ Mac. Ollama can't do this model's vision yet.
+
+```bash
+brew install llama.cpp
+hub/scripts/serve-nemotron-local.sh --download   # once, into ~/models/nemotron-3-nano-omni
+hub/scripts/serve-nemotron-local.sh              # leave running (127.0.0.1:8080)
+```
+
+`~/.config/haptic-hub/nim.env`:
+
+```
+NIM_BASE_URL=http://localhost:8080/v1
+NIM_MODEL=nemotron-3-nano-omni
+```
+
+Then `uv run haptic-hub run ...` uses it by default. `NEMOTRON_QUANT`,
+`NEMOTRON_DIR` and `NEMOTRON_PORT` override the script's defaults.
 
 ### Serving Nemotron on Brev
 
